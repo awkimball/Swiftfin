@@ -160,6 +160,12 @@ extension VideoPlayerType {
 
         SubtitleProfile.build(method: .hls) {
             SubtitleFormat.vtt
+            SubtitleFormat.subrip
+            SubtitleFormat.ass
+            SubtitleFormat.ssa
+            SubtitleFormat.mov_text
+            SubtitleFormat.subviewer
+            SubtitleFormat.subviewer1
         }
     }
 

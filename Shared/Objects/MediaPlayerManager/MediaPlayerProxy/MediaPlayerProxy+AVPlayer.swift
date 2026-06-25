@@ -40,6 +40,8 @@ class AVMediaPlayerProxy: VideoMediaPlayerProxy {
     private var managerItemObserver: AnyCancellable?
     private var managerStateObserver: AnyCancellable?
 
+    private var playlistRewriter: HLSPlaylistRewriter?
+
     weak var manager: MediaPlayerManager? {
         didSet {
             for var o in observers {
@@ -161,7 +163,14 @@ extension AVMediaPlayerProxy {
     private func playNew(item: MediaPlayerItem) {
         let baseItem = item.baseItem
 
-        let newAVPlayerItem = AVPlayerItem(url: item.url)
+        let newAVPlayerItem: AVPlayerItem
+        if let (asset, rewriter) = HLSPlaylistRewriter.makeAsset(for: item) {
+            playlistRewriter = rewriter
+            newAVPlayerItem = AVPlayerItem(asset: asset)
+        } else {
+            playlistRewriter = nil
+            newAVPlayerItem = AVPlayerItem(url: item.url)
+        }
         newAVPlayerItem.externalMetadata = item.baseItem.avMetadata
 
         player.replaceCurrentItem(with: newAVPlayerItem)
