@@ -42,6 +42,12 @@ class AVMediaPlayerProxy: VideoMediaPlayerProxy {
 
     private var playlistRewriter: HLSPlaylistRewriter?
 
+    private var currentLiveItem: MediaPlayerItem?
+
+    // One-shot startup watchdog: a non-forced live source that AVPlayer can't start
+    // (decode failure or silent spin) escalates once to a forced server-side re-encode.
+    private var liveStartupWatchdog: Task<Void, Never>?
+
     weak var manager: MediaPlayerManager? {
         didSet {
             for var o in observers {
@@ -142,6 +148,10 @@ extension AVMediaPlayerProxy {
     private func playbackStopped() {
         player.pause()
 
+        liveStartupWatchdog?.cancel()
+        liveStartupWatchdog = nil
+        currentLiveItem = nil
+
         if let timeObserver {
             DispatchQueue.main.async {
                 self.player.removeTimeObserver(timeObserver)
@@ -160,9 +170,7 @@ extension AVMediaPlayerProxy {
         }
     }
 
-    private func playNew(item: MediaPlayerItem) {
-        let baseItem = item.baseItem
-
+    private func makeAVPlayerItem(for item: MediaPlayerItem) -> AVPlayerItem {
         let newAVPlayerItem: AVPlayerItem
         if let (asset, rewriter) = HLSPlaylistRewriter.makeAsset(for: item) {
             playlistRewriter = rewriter
@@ -173,9 +181,32 @@ extension AVMediaPlayerProxy {
         }
         newAVPlayerItem.externalMetadata = item.baseItem.avMetadata
 
+        return newAVPlayerItem
+    }
+
+    private func playNew(item: MediaPlayerItem) {
+        let baseItem = item.baseItem
+        let isLiveStream = baseItem.isLiveStream == true
+
+        currentLiveItem = isLiveStream ? item : nil
+
+        let newAVPlayerItem = makeAVPlayerItem(for: item)
+
         player.replaceCurrentItem(with: newAVPlayerItem)
 
-        // TODO: protect against paused
+        liveStartupWatchdog?.cancel()
+        liveStartupWatchdog = nil
+        if isLiveStream {
+            liveStartupWatchdog = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(8))
+                guard let self, !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard self.player.timeControlStatus != .playing else { return }
+                    self.manager?.fallbackToVideoTranscode()
+                }
+            }
+        }
+
 //        rateObserver = player.observe(\.rate, options: [.new, .initial]) { _, value in
 //            DispatchQueue.main.async {
 //                self.manager?.set(rate: value.newValue ?? 1.0)
@@ -185,24 +216,35 @@ extension AVMediaPlayerProxy {
         timeControlStatusObserver = player.observe(\.timeControlStatus, options: [.new, .initial]) { player, _ in
             let timeControlStatus = player.timeControlStatus
 
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [weak self] in
                 switch timeControlStatus {
                 case .paused:
-                    self.manager?.setPlaybackRequestStatus(status: .paused)
+                    self?.manager?.setPlaybackRequestStatus(status: .paused)
                 case .waitingToPlayAtSpecifiedRate: ()
                 // TODO: buffering
                 case .playing:
-                    self.manager?.setPlaybackRequestStatus(status: .playing)
+                    self?.liveStartupWatchdog?.cancel()
+                    self?.liveStartupWatchdog = nil
+                    self?.manager?.setPlaybackRequestStatus(status: .playing)
                 @unknown default: ()
                 }
             }
         }
 
         // TODO: proper handling of none/unknown states
-        statusObserver = player.observe(\.currentItem?.status, options: [.new, .initial]) { _, value in
-            guard let newValue = value.newValue else { return }
+        statusObserver = player.observe(\.currentItem?.status, options: [.new, .initial]) { [weak self] _, value in
+            guard let self, let newValue = value.newValue else { return }
             switch newValue {
             case .failed:
+                // Live failures (native or forced) route through the manager's bounded
+                // recovery: first force a re-encode, then retry the forced item a few times
+                // for transient channel-switch failures.
+                if baseItem.isLiveStream == true {
+                    DispatchQueue.main.async {
+                        self.manager?.fallbackToVideoTranscode()
+                    }
+                    return
+                }
                 if let error = self.player.error {
                     DispatchQueue.main.async {
                         self.manager?.error(ErrorMessage("AVPlayer error: \(error.localizedDescription)"))

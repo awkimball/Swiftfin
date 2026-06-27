@@ -76,7 +76,17 @@ class MediaProgressObserver: ViewModel, MediaPlayerObserver {
         timer.poke()
 
         if let item, newItem !== item {
-            sendStopReport(for: item, seconds: manager?.seconds)
+            // Don't send a stop report when the new item reuses the same live stream
+            // (e.g. the live transcode fallback rebuilds the item but keeps the same
+            // liveStreamID). Reporting stopped closes the shared live stream on the
+            // server, tearing it out from under the new item's transcode.
+            let oldLiveStreamID = item.mediaSource.liveStreamID
+            let newLiveStreamID = newItem?.mediaSource.liveStreamID
+            let liveStreamReused = oldLiveStreamID != nil && oldLiveStreamID == newLiveStreamID
+
+            if !liveStreamReused {
+                sendStopReport(for: item, seconds: manager?.seconds)
+            }
 
             self.item = newItem
             self.hasSentStart = false

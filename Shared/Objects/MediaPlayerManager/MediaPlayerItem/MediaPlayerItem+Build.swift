@@ -26,6 +26,7 @@ extension MediaPlayerItem {
         videoPlayerType: VideoPlayerType = Defaults[.VideoPlayer.videoPlayerType],
         requestedBitrate: PlaybackBitrate = Defaults[.VideoPlayer.Playback.appMaximumBitrate],
         compatibilityMode: PlaybackCompatibility = Defaults[.VideoPlayer.Playback.compatibilityMode],
+        forceVideoReencode: Bool = false,
         modifyItem: ((inout BaseItemDto) -> Void)? = nil
     ) async throws -> MediaPlayerItem {
 
@@ -132,6 +133,7 @@ extension MediaPlayerItem {
             mediaSource: mediaSource,
             playSessionID: playSessionID,
             userSession: userSession,
+            forceVideoReencode: forceVideoReencode,
             logger: logger
         )
 
@@ -176,7 +178,8 @@ extension MediaPlayerItem {
             initialAudioStreamIndex: audioStreamIndex,
             initialSubtitleStreamIndex: subtitleStreamIndex,
             previewImageProvider: previewImageProvider,
-            thumbnailProvider: item.getNowPlayingImage
+            thumbnailProvider: item.getNowPlayingImage,
+            forcedVideoReencode: forceVideoReencode
         )
     }
 
@@ -187,6 +190,7 @@ extension MediaPlayerItem {
         mediaSource: MediaSourceInfo,
         playSessionID: String,
         userSession: UserSession,
+        forceVideoReencode: Bool = false,
         logger: Logger
     ) throws -> URL {
 
@@ -205,6 +209,17 @@ extension MediaPlayerItem {
             if item.isLiveStream, !transcodingPath.localizedCaseInsensitiveContains("AllowAudioStreamCopy") {
                 let separator = transcodingPath.contains("?") ? "&" : "?"
                 transcodingPathToUse = transcodingPath + "\(separator)AllowAudioStreamCopy=false"
+            }
+
+            // Fallback path: some live sources (e.g. spliced/stitched IPTV feeds that
+            // switch codec/resolution mid-stream or carry corrupt, non-monotonic
+            // timestamps) cannot be direct-streamed/remuxed into a single fMP4 HLS
+            // track that AVPlayer will accept. When native playback fails we rebuild
+            // forcing a server-side video re-encode, which normalizes the output to a
+            // single codec/resolution with clean timestamps.
+            if forceVideoReencode, !transcodingPathToUse.localizedCaseInsensitiveContains("AllowVideoStreamCopy") {
+                let separator = transcodingPathToUse.contains("?") ? "&" : "?"
+                transcodingPathToUse += "\(separator)AllowVideoStreamCopy=false"
             }
 
             guard let url = userSession.client.url(path: transcodingPathToUse) else {

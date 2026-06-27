@@ -58,6 +58,11 @@ class MediaPlayerItem: ViewModel, MediaPlayerObserver {
     let thumbnailProvider: ThumbnailProvider?
     let url: URL
 
+    /// Whether this item was built forcing a server-side video re-encode
+    /// (the live-stream fallback when native copy/remux playback fails).
+    /// Used to avoid retrying the fallback indefinitely.
+    let forcedVideoReencode: Bool
+
     let audioStreams: [MediaStream]
     let subtitleStreams: [MediaStream]
     let videoStreams: [MediaStream]
@@ -76,7 +81,8 @@ class MediaPlayerItem: ViewModel, MediaPlayerObserver {
         initialAudioStreamIndex: Int? = nil,
         initialSubtitleStreamIndex: Int? = nil,
         previewImageProvider: (any PreviewImageProvider)? = nil,
-        thumbnailProvider: ThumbnailProvider? = nil
+        thumbnailProvider: ThumbnailProvider? = nil,
+        forcedVideoReencode: Bool = false
     ) {
         self.baseItem = baseItem
         self.mediaSource = mediaSource
@@ -86,6 +92,7 @@ class MediaPlayerItem: ViewModel, MediaPlayerObserver {
         self.previewImageProvider = previewImageProvider
         self.thumbnailProvider = thumbnailProvider
         self.url = url
+        self.forcedVideoReencode = forcedVideoReencode
 
         let mediaStreams = mediaSource.mediaStreams
         let isTranscoding = mediaSource.transcodingURL != nil

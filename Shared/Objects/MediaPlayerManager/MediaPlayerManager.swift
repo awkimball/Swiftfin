@@ -55,6 +55,7 @@ final class MediaPlayerManager: ViewModel {
     enum Action {
         case ended
         case error
+        case fallbackToVideoTranscode
         case playNewItem(provider: MediaPlayerItemProvider)
         case setBitrate(bitrate: PlaybackBitrate)
         case setPlaybackRequestStatus(status: PlaybackRequestStatus)
@@ -180,6 +181,16 @@ final class MediaPlayerManager: ViewModel {
 
     private var initialMediaPlayerItemProvider: MediaPlayerItemProvider?
 
+    /// Set once we've already rebuilt the current item forcing a server-side
+    /// video re-encode, so a subsequent failure doesn't loop the fallback.
+    private var didFallbackToVideoTranscode = false
+
+    /// How many times we've (re)built the forced transcode for the current item.
+    /// Forced playback can fail transiently during channel-switch churn, so we
+    /// retry it a bounded number of times before surfacing an error.
+    private var forcedTranscodeAttempts = 0
+    private let maxForcedTranscodeAttempts = 3
+
     // MARK: init
 
 //    static let empty: MediaPlayerManager = .init()
@@ -276,10 +287,44 @@ final class MediaPlayerManager: ViewModel {
 
     @Function(\Action.Cases.playNewItem)
     private func _playNewItem(_ provider: MediaPlayerItemProvider) async throws {
+        didFallbackToVideoTranscode = false
+        forcedTranscodeAttempts = 0
         item = provider.item
         setSupplements()
         proxy?.stop()
         playbackItem = try await provider()
+    }
+
+    /// Live fallback: when native copy/remux playback of a live stream fails
+    /// (e.g. a spliced IPTV feed AVPlayer can't decode), rebuild the current item
+    /// once forcing a server-side video re-encode. Good sources never reach here;
+    /// only sources that fail native playback are transcoded.
+    @Function(\Action.Cases.fallbackToVideoTranscode)
+    private func _fallbackToVideoTranscode() async throws {
+        guard let currentItem = playbackItem,
+              currentItem.baseItem.isLiveStream == true
+        else { return }
+
+        if !didFallbackToVideoTranscode {
+            // Native copy/remux playback failed: force a server-side re-encode.
+            didFallbackToVideoTranscode = true
+            forcedTranscodeAttempts = 1
+            logger.info("Native live playback failed; falling back to forced video transcode")
+            try await updateMediaPlayerItem(
+                currentItem: currentItem,
+                forceVideoReencode: true
+            )
+        } else if currentItem.forcedVideoReencode, forcedTranscodeAttempts < maxForcedTranscodeAttempts {
+            // Forced playback failed too, usually transient channel-switch churn.
+            // Rebuild the forced item after a brief settle so the server stabilizes.
+            forcedTranscodeAttempts += 1
+            logger.info("Forced transcode failed; retrying (attempt \(forcedTranscodeAttempts))")
+            try? await Task.sleep(for: .seconds(2))
+            try await updateMediaPlayerItem(
+                currentItem: currentItem,
+                forceVideoReencode: true
+            )
+        }
     }
 
     @Function(\Action.Cases.setBitrate)
@@ -360,6 +405,8 @@ final class MediaPlayerManager: ViewModel {
             await self.stop()
             return
         }
+        didFallbackToVideoTranscode = false
+        forcedTranscodeAttempts = 0
         self.initialMediaPlayerItemProvider = nil
         playbackItem = try await initialMediaPlayerItemProvider()
     }
@@ -393,7 +440,8 @@ final class MediaPlayerManager: ViewModel {
         currentItem: MediaPlayerItem,
         audioStreamIndex: Int? = nil,
         subtitleStreamIndex: Int? = nil,
-        requestedBitrate: PlaybackBitrate? = nil
+        requestedBitrate: PlaybackBitrate? = nil,
+        forceVideoReencode: Bool = false
     ) async throws {
 
         // Capture the current playback position before stopping
@@ -416,6 +464,7 @@ final class MediaPlayerManager: ViewModel {
             audioStreamIndex: audioStreamIndex ?? currentItem.selectedAudioStreamIndex,
             subtitleStreamIndex: subtitleStreamIndex ?? currentItem.selectedSubtitleStreamIndex,
             requestedBitrate: requestedBitrate ?? currentItem.requestedBitrate,
+            forceVideoReencode: forceVideoReencode || currentItem.forcedVideoReencode,
             modifyItem: { item in
                 if item.userData == nil {
                     item.userData = UserItemDataDto()
