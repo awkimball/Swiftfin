@@ -48,6 +48,13 @@ class AVMediaPlayerProxy: VideoMediaPlayerProxy {
     // (decode failure or silent spin) escalates once to a forced server-side re-encode.
     private var liveStartupWatchdog: Task<Void, Never>?
 
+    // A live transcode needs a few seconds to produce its first segments; AVPlayer can
+    // fail the item while the variant playlist still 404s. Reload the same URL (keeping
+    // the play session / live stream alive) a few times before escalating to a rebuild.
+    private var liveReloadAttempts = 0
+    private let maxLiveReloadAttempts = 8
+    private let liveReloadDelay: TimeInterval = 1
+
     weak var manager: MediaPlayerManager? {
         didSet {
             for var o in observers {
@@ -195,28 +202,62 @@ extension AVMediaPlayerProxy {
         return newAVPlayerItem
     }
 
+    private func armLiveStartupWatchdog() {
+        liveStartupWatchdog?.cancel()
+        liveStartupWatchdog = nil
+        guard currentLiveItem != nil else { return }
+
+        liveStartupWatchdog = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(8))
+            guard let self, !Task.isCancelled else { return }
+            await MainActor.run {
+                guard self.player.timeControlStatus != .playing else { return }
+                self.manager?.fallbackToVideoTranscode()
+            }
+        }
+    }
+
+    private func handleLiveFailure() {
+        guard let liveItem = currentLiveItem else {
+            manager?.fallbackToVideoTranscode()
+            return
+        }
+
+        // -12927 = AVPlayer can't decode the media (e.g. an HDR or MPEG-2 copy); that needs
+        // a forced server re-encode. Other failures during live transcode startup are
+        // transient (the variant playlist/segments briefly 404 while ffmpeg warms up), so
+        // reload the same URL to keep the play session and live stream alive rather than
+        // rebuilding, which would tear the live stream down and starve the transcode.
+        let errorCode = (player.currentItem?.error as NSError?)?.code
+
+        if errorCode != -12927, liveReloadAttempts < maxLiveReloadAttempts {
+            liveReloadAttempts += 1
+            liveStartupWatchdog?.cancel()
+            liveStartupWatchdog = nil
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + liveReloadDelay) { [weak self] in
+                guard let self, self.currentLiveItem === liveItem else { return }
+                self.player.replaceCurrentItem(with: self.makeAVPlayerItem(for: liveItem))
+                self.armLiveStartupWatchdog()
+                self.play()
+            }
+        } else {
+            manager?.fallbackToVideoTranscode()
+        }
+    }
+
     private func playNew(item: MediaPlayerItem) {
         let baseItem = item.baseItem
         let isLiveStream = baseItem.isLiveStream == true
 
         currentLiveItem = isLiveStream ? item : nil
+        liveReloadAttempts = 0
 
         let newAVPlayerItem = makeAVPlayerItem(for: item)
 
         player.replaceCurrentItem(with: newAVPlayerItem)
 
-        liveStartupWatchdog?.cancel()
-        liveStartupWatchdog = nil
-        if isLiveStream {
-            liveStartupWatchdog = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(8))
-                guard let self, !Task.isCancelled else { return }
-                await MainActor.run {
-                    guard self.player.timeControlStatus != .playing else { return }
-                    self.manager?.fallbackToVideoTranscode()
-                }
-            }
-        }
+        armLiveStartupWatchdog()
 
 //        rateObserver = player.observe(\.rate, options: [.new, .initial]) { _, value in
 //            DispatchQueue.main.async {
@@ -236,6 +277,7 @@ extension AVMediaPlayerProxy {
                 case .playing:
                     self?.liveStartupWatchdog?.cancel()
                     self?.liveStartupWatchdog = nil
+                    self?.liveReloadAttempts = 0
                     self?.manager?.setPlaybackRequestStatus(status: .playing)
                 @unknown default: ()
                 }
@@ -247,12 +289,12 @@ extension AVMediaPlayerProxy {
             guard let self, let newValue = value.newValue else { return }
             switch newValue {
             case .failed:
-                // Live failures (native or forced) route through the manager's bounded
-                // recovery: first force a re-encode, then retry the forced item a few times
-                // for transient channel-switch failures.
+                // Live failures route through the proxy's recovery: a transient startup
+                // failure (transcode still warming up) reloads the same URL; a decode
+                // failure escalates to a forced server-side re-encode.
                 if baseItem.isLiveStream == true {
                     DispatchQueue.main.async {
-                        self.manager?.fallbackToVideoTranscode()
+                        self.handleLiveFailure()
                     }
                     return
                 }

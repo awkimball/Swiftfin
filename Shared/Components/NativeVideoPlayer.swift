@@ -118,16 +118,6 @@ extension NativeVideoPlayer {
                 \.currentItem?.status,
                 options: [.initial, .new]
             ) { [weak self] player, _ in
-                if player.currentItem?.status == .failed {
-                    // Live fallback: a spliced/corrupt live source can't be direct-streamed
-                    // into an fMP4 HLS track AVPlayer will decode. Rebuild forcing a server-side
-                    // re-encode (no-ops for non-live or if already tried).
-                    if let manager = self?.manager {
-                        Task { @MainActor in
-                            manager.fallbackToVideoTranscode()
-                        }
-                    }
-                }
                 guard player.currentItem?.status == .readyToPlay else { return }
                 Task { @MainActor in
                     self?.rebuildTransportBarMenus()
