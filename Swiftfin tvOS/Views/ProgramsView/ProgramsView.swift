@@ -26,9 +26,41 @@ struct ProgramsView: View {
     private var programsViewModel = ProgramsViewModel()
 
     @ViewBuilder
+    private var liveTVSectionScrollView: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack {
+                liveTVSectionButton(
+                    title: L10n.channels,
+                    systemImage: "play.square.stack"
+                ) {
+                    router.route(to: .channels)
+                }
+            }
+            .edgePadding(.horizontal)
+        }
+    }
+
+    @ViewBuilder
+    private func liveTVSectionButton(title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .font(.headline)
+                .padding(.vertical)
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.card)
+    }
+
+    @ViewBuilder
     private var contentView: some View {
         ScrollView(showsIndicators: false) {
             VStack(spacing: 20) {
+
+                liveTVSectionScrollView
+
+                if programsViewModel.hasNoResults {
+                    ContentUnavailableView(L10n.noPrograms.localizedCapitalized, systemImage: "tv")
+                }
 
                 if programsViewModel.recommended.isNotEmpty {
                     programsSection(title: L10n.onNow, keyPath: \.recommended)
@@ -84,11 +116,7 @@ struct ProgramsView: View {
         ZStack {
             switch programsViewModel.state {
             case .content:
-                if programsViewModel.hasNoResults {
-                    ContentUnavailableView(L10n.noPrograms.localizedCapitalized, systemImage: "tv")
-                } else {
-                    contentView
-                }
+                contentView
             case let .error(error):
                 ErrorView(error: error)
             case .initial, .refreshing:
