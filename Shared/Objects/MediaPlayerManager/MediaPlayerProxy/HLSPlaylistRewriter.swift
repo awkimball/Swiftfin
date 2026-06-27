@@ -18,6 +18,13 @@ final class HLSPlaylistRewriter: NSObject, AVAssetResourceLoaderDelegate {
         let name: String
         let language: String
         let isForced: Bool
+        let isHearingImpaired: Bool
+    }
+
+    private enum SubtitleRole {
+        case full
+        case forced
+        case sdh
     }
 
     private struct Audio {
@@ -33,6 +40,7 @@ final class HLSPlaylistRewriter: NSObject, AVAssetResourceLoaderDelegate {
     private let apiKey: String
     private let subtitles: [Subtitle]
     private let audio: Audio?
+    private var cachedSubtitleLines: [String]?
 
     static func makeAsset(for item: MediaPlayerItem) -> (AVURLAsset, HLSPlaylistRewriter)? {
 
@@ -59,13 +67,19 @@ final class HLSPlaylistRewriter: NSObject, AVAssetResourceLoaderDelegate {
 
         let realURL = item.url
 
-        let subtitles: [Subtitle] = item.subtitleStreams.compactMap { stream in
+        // Inject every text subtitle track. AVKit's native picker labels options by LANGUAGE
+        // (ignoring NAME) and collapses same-language tracks unless they differ by FORCED or
+        // accessibility characteristics, so each track's role (forced / full / SDH) is resolved
+        // from its cue density once the master is served (see classifyRoles) and encoded into
+        // those attributes to keep every entry distinct and correctly auto-selected.
+        let subtitles: [Subtitle] = item.subtitleStreams.compactMap { stream -> Subtitle? in
             guard let index = stream.index, stream.isTextSubtitleStream == true else { return nil }
             return Subtitle(
                 index: index,
                 name: stream.displayTitle ?? stream.language ?? "Subtitle",
                 language: stream.language ?? "Unknown",
-                isForced: stream.isForced ?? false
+                isForced: stream.isForced ?? false,
+                isHearingImpaired: stream.isHearingImpaired ?? false
             )
         }
 
@@ -129,7 +143,9 @@ final class HLSPlaylistRewriter: NSObject, AVAssetResourceLoaderDelegate {
                 return
             }
 
-            let outData = Data(rewrite(playlist: playlist).utf8)
+            let rewritten = await rewrite(playlist: playlist, subtitleLines: resolvedSubtitleLines())
+
+            let outData = Data(rewritten.utf8)
 
             if let contentRequest = loadingRequest.contentInformationRequest {
                 contentRequest.contentType = "application/vnd.apple.mpegurl"
@@ -144,11 +160,11 @@ final class HLSPlaylistRewriter: NSObject, AVAssetResourceLoaderDelegate {
         }
     }
 
-    private func rewrite(playlist: String) -> String {
+    private func rewrite(playlist: String, subtitleLines: [String]) -> String {
         let lines = playlist.components(separatedBy: "\n")
 
         let hasExistingSubtitles = lines.contains { $0.hasPrefix("#EXT-X-MEDIA:") && $0.contains("TYPE=SUBTITLES") }
-        let inject = !subtitles.isEmpty && !hasExistingSubtitles
+        let inject = !subtitleLines.isEmpty && !hasExistingSubtitles
         let hasExistingAudio = lines.contains { $0.hasPrefix("#EXT-X-MEDIA:") && $0.contains("TYPE=AUDIO") }
         let injectAudio = audio != nil && !hasExistingAudio
 
@@ -167,7 +183,7 @@ final class HLSPlaylistRewriter: NSObject, AVAssetResourceLoaderDelegate {
                 }
 
                 if inject {
-                    output.append(contentsOf: subtitles.map(mediaLine(for:)))
+                    output.append(contentsOf: subtitleLines)
                 }
             } else if line.hasPrefix("#EXT-X-STREAM-INF:") {
                 output.append(line + streamInfSuffix)
@@ -181,7 +197,7 @@ final class HLSPlaylistRewriter: NSObject, AVAssetResourceLoaderDelegate {
         }
 
         Self.logger
-            .info("HLS rewriter injected \(injectAudio ? 1 : 0) audio and \(inject ? subtitles.count : 0) subtitle renditions")
+            .info("HLS rewriter injected \(injectAudio ? 1 : 0) audio and \(inject ? subtitleLines.count : 0) subtitle renditions")
 
         return output.joined(separator: "\n")
     }
@@ -190,8 +206,116 @@ final class HLSPlaylistRewriter: NSObject, AVAssetResourceLoaderDelegate {
         "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"\(audio.name)\",LANGUAGE=\"\(audio.language)\",DEFAULT=YES,AUTOSELECT=YES"
     }
 
-    private func mediaLine(for subtitle: Subtitle) -> String {
-        "#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"subs\",NAME=\"\(subtitle.name)\",DEFAULT=NO,FORCED=\(subtitle.isForced ? "YES" : "NO"),AUTOSELECT=YES,URI=\"\(subtitleURI(index: subtitle.index))\",LANGUAGE=\"\(subtitle.language)\""
+    /// Builds the injected `#EXT-X-MEDIA` subtitle renditions once, caching the result so the
+    /// cue counts are only fetched the first time the master playlist is served.
+    private func resolvedSubtitleLines() async -> [String] {
+        if let cachedSubtitleLines { return cachedSubtitleLines }
+
+        guard !subtitles.isEmpty else {
+            cachedSubtitleLines = []
+            return []
+        }
+
+        let cueCounts = await cueCounts(for: subtitles)
+        let lines = subtitleMediaLines(subtitles, cueCounts: cueCounts)
+        cachedSubtitleLines = lines
+
+        return lines
+    }
+
+    /// Resolves each track's role from the relative cue density within its language group, since
+    /// the source metadata often can't distinguish forced / full / SDH variants:
+    /// - one track for a language is the full subtitle;
+    /// - two tracks → the sparser one is forced (foreign-dialogue only), the denser one is full;
+    /// - three or more → sparsest is forced, densest is SDH (adds sound/music cues), rest are full.
+    private func classifyRoles(_ subtitles: [Subtitle], cueCounts: [Int: Int]) -> [Int: SubtitleRole] {
+        var byLanguage: [String: [Subtitle]] = [:]
+        for subtitle in subtitles {
+            byLanguage[subtitle.language, default: []].append(subtitle)
+        }
+
+        var roles: [Int: SubtitleRole] = [:]
+        for group in byLanguage.values {
+            guard group.count > 1 else {
+                group.forEach { roles[$0.index] = .full }
+                continue
+            }
+
+            let sorted = group.sorted { (cueCounts[$0.index] ?? 0) < (cueCounts[$1.index] ?? 0) }
+            for (offset, subtitle) in sorted.enumerated() {
+                if offset == 0 {
+                    roles[subtitle.index] = .forced
+                } else if offset == sorted.count - 1, sorted.count >= 3 {
+                    roles[subtitle.index] = .sdh
+                } else {
+                    roles[subtitle.index] = .full
+                }
+            }
+        }
+        return roles
+    }
+
+    private func subtitleMediaLines(_ subtitles: [Subtitle], cueCounts: [Int: Int]) -> [String] {
+        let roles = classifyRoles(subtitles, cueCounts: cueCounts)
+        var usedNames: Set<String> = []
+
+        return subtitles.map { subtitle in
+            let role = roles[subtitle.index] ?? .full
+
+            // Guarantee a unique NAME so renditions that AVKit would otherwise treat as identical
+            // stay valid; the picker labels by LANGUAGE regardless.
+            var uniqueName = subtitle.name
+            var suffix = 2
+            while !usedNames.insert(uniqueName).inserted {
+                uniqueName = "\(subtitle.name) (\(suffix))"
+                suffix += 1
+            }
+
+            // FORCED=YES tracks are auto-applied with matching audio and hidden from the picker;
+            // full and SDH tracks stay selectable, with SDH carrying accessibility characteristics
+            // so it reads as a distinct option (and honours the system "Closed Captions + SDH" setting).
+            var line = "#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"subs\",NAME=\"\(uniqueName)\",DEFAULT=NO,FORCED=\(role == .forced ? "YES" : "NO"),AUTOSELECT=YES"
+            if role == .sdh {
+                line += ",CHARACTERISTICS=\"public.accessibility.describes-music-and-sound,public.accessibility.transcribes-spoken-dialog\""
+            }
+            line += ",URI=\"\(subtitleURI(index: subtitle.index))\",LANGUAGE=\"\(subtitle.language)\""
+            return line
+        }
+    }
+
+    /// Fetches every track's WebVTT in parallel and counts its cues (`-->` arrows).
+    private func cueCounts(for subtitles: [Subtitle]) async -> [Int: Int] {
+        let requests: [(index: Int, url: URL)] = subtitles.compactMap { subtitle in
+            guard let url = streamVttURL(index: subtitle.index) else { return nil }
+            return (subtitle.index, url)
+        }
+
+        return await withTaskGroup(of: (Int, Int).self) { group in
+            for request in requests {
+                group.addTask {
+                    guard let (data, _) = try? await URLSession.shared.data(from: request.url),
+                          let text = String(data: data, encoding: .utf8)
+                    else {
+                        return (request.index, 0)
+                    }
+                    return (request.index, text.components(separatedBy: "-->").count - 1)
+                }
+            }
+
+            var counts: [Int: Int] = [:]
+            for await (index, count) in group {
+                counts[index] = count
+            }
+            return counts
+        }
+    }
+
+    private func streamVttURL(index: Int) -> URL? {
+        var components = URLComponents(url: realURL, resolvingAgainstBaseURL: false)
+        let basePath = (realURL.path as NSString).deletingLastPathComponent
+        components?.path = "\(basePath)/\(mediaSourceID)/Subtitles/\(index)/0/Stream.vtt"
+        components?.query = "ApiKey=\(apiKey)"
+        return components?.url
     }
 
     private func subtitleURI(index: Int) -> String {
