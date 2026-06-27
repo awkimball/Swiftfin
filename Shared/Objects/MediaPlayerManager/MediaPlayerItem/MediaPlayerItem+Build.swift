@@ -197,7 +197,17 @@ extension MediaPlayerItem {
         if let transcodingPath = mediaSource.transcodingURL {
             logger.trace("Using transcoding URL for item \(itemID)")
 
-            guard let url = userSession.client.url(path: transcodingPath) else {
+            // Live IPTV audio is frequently non-LC AAC (HE-AAC / "Main") that the server
+            // probes poorly and copies while mislabeling it as mp4a.40.2 (LC) in the HLS
+            // manifest. AVPlayer then fails to configure the audio decoder. Forcing an audio
+            // re-encode makes the server emit clean AAC-LC that matches the manifest.
+            var transcodingPathToUse = transcodingPath
+            if item.isLiveStream, !transcodingPath.localizedCaseInsensitiveContains("AllowAudioStreamCopy") {
+                let separator = transcodingPath.contains("?") ? "&" : "?"
+                transcodingPathToUse = transcodingPath + "\(separator)AllowAudioStreamCopy=false"
+            }
+
+            guard let url = userSession.client.url(path: transcodingPathToUse) else {
                 throw ErrorMessage("Unable to make transcoding URL")
             }
 
