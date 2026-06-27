@@ -38,8 +38,24 @@ extension UserDefaults {
         }
     }
 
+    private static let userSuiteCacheLock = NSLock()
+    private static var userSuiteCache: [String: UserDefaults] = [:]
+
+    /// `UserDefaults(suiteName:)` allocates a new instance on every call and is read on hot
+    /// paths (every per-user `Defaults.Key` is built against the current user's suite, often
+    /// from SwiftUI `body` getters). Memoize the suite per id so repeated reads are a cheap
+    /// dictionary lookup instead of reconstructing the suite each time.
     static func userSuite(id: String) -> UserDefaults {
-        UserDefaults(suiteName: id)!
+        userSuiteCacheLock.lock()
+        defer { userSuiteCacheLock.unlock() }
+
+        if let cached = userSuiteCache[id] {
+            return cached
+        }
+
+        let suite = UserDefaults(suiteName: id)!
+        userSuiteCache[id] = suite
+        return suite
     }
 }
 
