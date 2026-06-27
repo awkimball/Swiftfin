@@ -222,6 +222,17 @@ extension MediaPlayerItem {
                 transcodingPathToUse += "\(separator)AllowVideoStreamCopy=false"
             }
 
+            // The native player injects external WebVTT subtitle renditions whose cues carry
+            // absolute (CopyTimestamps) times, so request CopyTimestamps on the video too. That
+            // keeps the stream on the same absolute timeline instead of re-basing to zero on each
+            // seek (-start_at_zero), which would drift the video away from the subtitle cues.
+            let hasTextSubtitles = mediaSource.mediaStreams?
+                .contains { $0.type == .subtitle && $0.isTextSubtitleStream == true } ?? false
+            if !item.isLiveStream, hasTextSubtitles, !transcodingPathToUse.localizedCaseInsensitiveContains("CopyTimestamps") {
+                let separator = transcodingPathToUse.contains("?") ? "&" : "?"
+                transcodingPathToUse += "\(separator)CopyTimestamps=true"
+            }
+
             guard let url = userSession.client.url(path: transcodingPathToUse) else {
                 throw ErrorMessage("Unable to make transcoding URL")
             }
