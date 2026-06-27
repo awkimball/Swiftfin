@@ -202,9 +202,8 @@ extension NativeVideoPlayer {
                         equalTo: contentOverlayView.safeAreaLayoutGuide.leadingAnchor,
                         constant: 50
                     ),
-                    host.view.topAnchor.constraint(
-                        equalTo: contentOverlayView.safeAreaLayoutGuide.topAnchor,
-                        constant: 50
+                    host.view.centerYAnchor.constraint(
+                        equalTo: contentOverlayView.safeAreaLayoutGuide.centerYAnchor
                     ),
                 ])
                 host.didMove(toParent: self)
@@ -257,8 +256,6 @@ private final class PlaybackInfoModel: ObservableObject {
     }
 
     @Published
-    private(set) var title: String = ""
-    @Published
     private(set) var streamRows: [Row] = []
     @Published
     private(set) var sourceRows: [Row] = []
@@ -274,7 +271,6 @@ private final class PlaybackInfoModel: ObservableObject {
     init(player: AVPlayer?, item: MediaPlayerItem?) {
         self.player = player
         self.item = item
-        self.title = item?.baseItem.displayTitle ?? ""
 
         if let itemID = item?.baseItem.id {
             let provider = PlaybackInformationProvider(itemID: itemID)
@@ -318,7 +314,13 @@ private final class PlaybackInfoModel: ObservableObject {
         }
 
         if let event = player?.currentItem?.accessLog()?.events.last {
-            if event.indicatedBitrate > 0 {
+            // Prefer the actual delivered media bitrate (bytes downloaded per second of
+            // media) over indicatedBitrate, which is only the playlist-advertised nominal
+            // BANDWIDTH and stays at the requested ceiling even when the encoder (e.g. ICQ
+            // HDR passthrough) emits far less.
+            if let actual = actualMediaBitrate() {
+                rows.append(Row(label: "Bitrate", value: actual.formatted(.bitRate)))
+            } else if event.indicatedBitrate > 0 {
                 rows.append(Row(label: "Bitrate", value: Int(event.indicatedBitrate).formatted(.bitRate)))
             }
             if event.observedBitrate > 0 {
@@ -327,6 +329,16 @@ private final class PlaybackInfoModel: ObservableObject {
         }
 
         return rows
+    }
+
+    /// The actual delivered media bitrate (bytes of media downloaded per second of media),
+    /// reflecting the real transcode/stream output rather than the nominal advertised rate.
+    private func actualMediaBitrate() -> Int? {
+        guard let event = player?.currentItem?.accessLog()?.events.last,
+              event.numberOfBytesTransferred > 0,
+              event.segmentsDownloadedDuration > 0.5
+        else { return nil }
+        return Int(Double(event.numberOfBytesTransferred) * 8 / event.segmentsDownloadedDuration)
     }
 
     private func buildSourceRows(_ item: MediaPlayerItem) -> [Row] {
@@ -385,8 +397,10 @@ private final class PlaybackInfoModel: ObservableObject {
             rows.append(Row(label: "Resolution", value: "\(width)x\(height)"))
         }
 
+        // Server-reported target/ceiling; the real output rate is the Stream "Bitrate"
+        // computed from the player's access log.
         if let bitrate = info.bitrate {
-            rows.append(Row(label: "Bitrate", value: bitrate.formatted(.bitRate)))
+            rows.append(Row(label: "Max Bitrate", value: bitrate.formatted(.bitRate)))
         }
 
         if let framerate = info.framerate {
@@ -432,18 +446,12 @@ private struct PlaybackInfoOverlay: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if !model.title.isEmpty {
-                Text(model.title)
-                    .font(.callout.weight(.semibold))
-                    .lineLimit(1)
-            }
-
             section("Stream", model.streamRows)
             section("Source", model.sourceRows)
             section("Transcode", model.transcodeRows)
         }
         .padding(20)
-        .frame(width: 440, alignment: .leading)
+        .frame(width: 340, alignment: .leading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
     }
 
@@ -459,6 +467,8 @@ private struct PlaybackInfoOverlay: View {
                     HStack(alignment: .firstTextBaseline) {
                         Text(row.label)
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                         Spacer(minLength: 20)
                         Text(row.value)
                             .multilineTextAlignment(.trailing)
