@@ -8,6 +8,7 @@
 
 import Combine
 import Defaults
+import Factory
 import Foundation
 import JellyfinAPI
 
@@ -107,10 +108,31 @@ class MediaProgressObserver: ViewModel, MediaPlayerObserver {
             if let item {
                 sendStopReport(for: item, seconds: manager?.seconds)
             }
+            // Immediately kill this device's transcodes instead of waiting for the server's
+            // ~60s kill timer. Otherwise a lingering live transcode keeps running on the GPU
+            // and contends with the next playback on replay (two 4K encodes -> stutter).
+            stopActiveEncodings()
             timer.stop()
             cancellables = []
             item = nil
         default: ()
+        }
+    }
+
+    private func stopActiveEncodings() {
+        #if DEBUG
+        guard Defaults[.sendProgressReports] else { return }
+        #endif
+
+        guard let userSession = Container.shared.currentUserSession(),
+              let deviceID = try? userSession.client.configuration.deviceID
+        else { return }
+
+        Task {
+            // An empty play session id stops all of this device's transcodes. The server kills
+            // them without closing the underlying live stream, so this is safe for live TV.
+            let request = Paths.stopEncodingProcess(deviceID: deviceID, playSessionID: "")
+            _ = try? await userSession.client.send(request)
         }
     }
 
