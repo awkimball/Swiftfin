@@ -56,17 +56,17 @@ class AVMediaPlayerProxy: VideoMediaPlayerProxy {
 
             if let manager {
                 managerItemObserver = manager.$playbackItem
-                    .sink { playbackItem in
+                    .sink { [weak self] playbackItem in
                         if let playbackItem {
-                            self.playNew(item: playbackItem)
+                            self?.playNew(item: playbackItem)
                         }
                     }
 
                 managerStateObserver = manager.$state
-                    .sink { state in
+                    .sink { [weak self] state in
                         switch state {
                         case .stopped:
-                            self.playbackStopped()
+                            self?.playbackStopped()
                         default: break
                         }
                     }
@@ -88,7 +88,8 @@ class AVMediaPlayerProxy: VideoMediaPlayerProxy {
         timeObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 1, preferredTimescale: 1000),
             queue: .main
-        ) { newTime in
+        ) { [weak self] newTime in
+            guard let self else { return }
             let newSeconds = Duration.seconds(newTime.seconds)
 
             if !self.isScrubbing.wrappedValue {
@@ -97,6 +98,16 @@ class AVMediaPlayerProxy: VideoMediaPlayerProxy {
 
             self.manager?.seconds = newSeconds
         }
+    }
+
+    deinit {
+        liveStartupWatchdog?.cancel()
+        if let timeObserver {
+            player.removeTimeObserver(timeObserver)
+        }
+        statusObserver?.invalidate()
+        timeControlStatusObserver?.invalidate()
+        player.replaceCurrentItem(with: nil)
     }
 
     func play() {
