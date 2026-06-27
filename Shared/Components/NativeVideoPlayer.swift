@@ -95,8 +95,10 @@ extension NativeVideoPlayer {
         private let proxy: AVMediaPlayerProxy
         private let manager: MediaPlayerManager
         private var itemStatusObserver: NSKeyValueObservation?
+        #if os(tvOS)
         private var playbackInfoController: UIViewController?
         private var playbackInfoModel: PlaybackInfoModel?
+        #endif
 
         init(proxy: AVMediaPlayerProxy, manager: MediaPlayerManager) {
             self.proxy = proxy
