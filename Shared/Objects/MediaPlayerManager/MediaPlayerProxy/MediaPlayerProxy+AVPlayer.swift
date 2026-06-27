@@ -93,9 +93,18 @@ class AVMediaPlayerProxy: VideoMediaPlayerProxy {
         }
     }
 
+    // tvOS uses AVPlayerViewController, which manages MPNowPlayingInfoCenter and the
+    // Siri-remote transport natively (we feed it AVPlayerItem.externalMetadata). Running
+    // NowPlayableObserver there double-writes Now Playing info, so AVKit re-overrides it
+    // several times a second — flooding the console with warnings and churning the main
+    // thread. Only attach it where we drive Now Playing ourselves (non-tvOS).
+    #if os(tvOS)
+    var observers: [any MediaPlayerObserver] = []
+    #else
     var observers: [any MediaPlayerObserver] = [
         NowPlayableObserver(),
     ]
+    #endif
 
     init() {
         self.player = AVPlayer()
