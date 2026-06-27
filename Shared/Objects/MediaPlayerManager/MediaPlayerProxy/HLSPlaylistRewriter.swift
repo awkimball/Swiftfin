@@ -35,10 +35,18 @@ final class HLSPlaylistRewriter: NSObject, AVAssetResourceLoaderDelegate {
     private let audio: Audio?
 
     static func makeAsset(for item: MediaPlayerItem) -> (AVURLAsset, HLSPlaylistRewriter)? {
+
+        // Live streams deliver a multi-variant, continuously-growing master playlist.
+        // Routing it through the custom-scheme resource loader does not fix the live
+        // failures (those are source/timestamp issues), so let AVPlayer load the server
+        // playlist directly and keep all variants available as fallbacks.
+        guard item.baseItem.isLiveStream != true else {
+            return nil
+        }
+
         guard item.url.absoluteString.contains(".m3u8"),
               var components = URLComponents(url: item.url, resolvingAgainstBaseURL: false)
         else {
-            logger.info("HLS rewriter skipped, not an HLS URL: \(item.url.absoluteString)")
             return nil
         }
 
@@ -46,7 +54,6 @@ final class HLSPlaylistRewriter: NSObject, AVAssetResourceLoaderDelegate {
         guard let mediaSourceID = queryItems.first(where: { $0.name == "MediaSourceId" })?.value,
               let apiKey = queryItems.first(where: { $0.name == "ApiKey" })?.value
         else {
-            logger.info("HLS rewriter skipped, missing MediaSourceId or ApiKey")
             return nil
         }
 
@@ -139,6 +146,7 @@ final class HLSPlaylistRewriter: NSObject, AVAssetResourceLoaderDelegate {
 
     private func rewrite(playlist: String) -> String {
         let lines = playlist.components(separatedBy: "\n")
+
         let hasExistingSubtitles = lines.contains { $0.hasPrefix("#EXT-X-MEDIA:") && $0.contains("TYPE=SUBTITLES") }
         let inject = !subtitles.isEmpty && !hasExistingSubtitles
         let hasExistingAudio = lines.contains { $0.hasPrefix("#EXT-X-MEDIA:") && $0.contains("TYPE=AUDIO") }
