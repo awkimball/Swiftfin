@@ -96,6 +96,8 @@ extension NativeVideoPlayer {
         private let manager: MediaPlayerManager
         private var itemStatusObserver: NSKeyValueObservation?
         #if os(tvOS)
+        private static let logger = Logger.swiftfin()
+        private var selectedSubtitleRenditionOffset: Int?
         private var playbackInfoController: UIViewController?
         private var playbackInfoModel: PlaybackInfoModel?
         #endif
@@ -142,7 +144,109 @@ extension NativeVideoPlayer {
 
         @MainActor
         private func rebuildTransportBarMenus() {
-            transportBarCustomMenuItems = [settingsMenu()]
+            var items: [UIMenuElement] = []
+            if let audioMenu = audioMenu() {
+                items.append(audioMenu)
+            }
+            if let subtitleMenu = subtitleMenu() {
+                items.append(subtitleMenu)
+            }
+            items.append(settingsMenu())
+            transportBarCustomMenuItems = items
+        }
+
+        /// Lists the source's audio tracks. Selecting one drives the existing track-change path,
+        /// which for a transcoded stream rebuilds the item with the new AudioStreamIndex (the server
+        /// muxes a single audio track, so an in-place switch isn't possible) while preserving position.
+        @MainActor
+        private func audioMenu() -> UIMenu? {
+            guard let item = manager.playbackItem else { return nil }
+
+            let audioStreams = item.audioStreams
+            guard audioStreams.count > 1 else { return nil }
+
+            let current = item.selectedAudioStreamIndex
+            let actions = audioStreams.compactMap { stream -> UIAction? in
+                guard let index = stream.index else { return nil }
+                return UIAction(
+                    title: stream.displayTitle ?? stream.language ?? "Audio \(index)",
+                    state: index == current ? .on : .off
+                ) { [weak self] _ in
+                    self?.manager.playbackItem?.selectedAudioStreamIndex = index
+                }
+            }
+
+            return UIMenu(
+                title: "Audio",
+                image: UIImage(systemName: "waveform"),
+                children: actions
+            )
+        }
+
+        /// Lists the source's text subtitle tracks plus an "Off" entry. AVKit's native picker labels every
+        /// option by LANGUAGE (so the three English tracks all read "English" and collapse into one), but
+        /// they are distinct, ordered options in the legible selection group. The server emits one rendition
+        /// per text subtitle in stream order, so each menu entry maps positionally to its group option,
+        /// reaching tracks the picker hides.
+        @MainActor
+        private func subtitleMenu() -> UIMenu? {
+            guard let item = manager.playbackItem else { return nil }
+
+            let streams = item.subtitleStreams.filter { $0.isTextSubtitleStream == true }
+            guard streams.isNotEmpty else { return nil }
+
+            let offAction = UIAction(
+                title: "Off",
+                state: selectedSubtitleRenditionOffset == nil ? .on : .off
+            ) { [weak self] _ in
+                self?.selectSubtitle(at: nil)
+            }
+
+            let actions = streams.enumerated().map { offset, stream in
+                UIAction(
+                    title: stream.displayTitle ?? stream.language ?? "Subtitle \(offset + 1)",
+                    state: selectedSubtitleRenditionOffset == offset ? .on : .off
+                ) { [weak self] _ in
+                    self?.selectSubtitle(at: offset)
+                }
+            }
+
+            return UIMenu(
+                title: "Subtitles",
+                image: UIImage(systemName: "captions.bubble"),
+                children: [offAction] + actions
+            )
+        }
+
+        /// Selects (or, when `nil`, disables) a subtitle by its position in the legible selection group,
+        /// which matches the order the server lists the text subtitle renditions. Position is used because
+        /// `AVMediaSelectionOption.displayName` only exposes the language, not the track's full title, so
+        /// same-language tracks can't be told apart by name.
+        @MainActor
+        private func selectSubtitle(at offset: Int?) {
+            guard let playerItem = player?.currentItem else { return }
+
+            selectedSubtitleRenditionOffset = offset
+            rebuildTransportBarMenus()
+
+            Task { @MainActor in
+                guard let group = try? await playerItem.asset.loadMediaSelectionGroup(for: .legible) else {
+                    Self.logger.warning("Subtitle select: no legible media selection group")
+                    return
+                }
+
+                guard let offset else {
+                    playerItem.select(nil, in: group)
+                    return
+                }
+
+                guard offset < group.options.count else {
+                    Self.logger.warning("Subtitle select: offset \(offset) out of range (\(group.options.count) options)")
+                    return
+                }
+
+                playerItem.select(group.options[offset], in: group)
+            }
         }
 
         @MainActor
