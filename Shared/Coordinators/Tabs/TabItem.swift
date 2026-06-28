@@ -89,6 +89,19 @@ extension TabItem {
         }
     }
 
+    static var liveTV: TabItem {
+        TabItem(
+            id: "liveTV",
+            title: L10n.liveTV,
+            systemImage: "play.tv"
+        ) {
+            ProgramsView()
+                .if(UIDevice.isTV) { view in
+                    view.toolbar(.hidden, for: .navigationBar)
+                }
+        }
+    }
+
     static var search: TabItem {
         TabItem(
             id: "search",

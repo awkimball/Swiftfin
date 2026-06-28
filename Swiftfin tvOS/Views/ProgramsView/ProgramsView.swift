@@ -28,7 +28,7 @@ struct ProgramsView: View {
     @ViewBuilder
     private var liveTVSectionScrollView: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack {
+            HStack(spacing: 30) {
                 liveTVSectionButton(
                     title: L10n.channels,
                     systemImage: "play.square.stack"
@@ -44,16 +44,27 @@ struct ProgramsView: View {
                 }
             }
             .edgePadding(.horizontal)
+            .padding(.vertical)
         }
+        .scrollClipDisabled()
     }
 
     @ViewBuilder
     private func liveTVSectionButton(title: String, systemImage: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Label(title, systemImage: systemImage)
-                .font(.headline)
-                .padding(.vertical)
-                .frame(maxWidth: .infinity)
+            ZStack {
+                Color(UIColor.darkGray)
+                    .opacity(0.5)
+
+                VStack(spacing: 20) {
+                    Image(systemName: systemImage)
+                        .font(.title)
+
+                    Text(title)
+                        .font(.title3)
+                }
+            }
+            .posterStyle(.landscape)
         }
         .buttonStyle(.card)
     }
