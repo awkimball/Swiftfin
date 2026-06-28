@@ -34,6 +34,9 @@ struct MultiViewPlayer: View {
     @State
     private var showControls = false
 
+    @FocusState
+    private var focusedControl: Int?
+
     let initialChannels: [BaseItemDto]
 
     private struct PickerTarget: Identifiable {
@@ -82,8 +85,24 @@ struct MultiViewPlayer: View {
             tileA.stop()
             tileB.stop()
         }
-        .onExitCommand {
+        .onPlayPauseCommand {
             withAnimation { showControls.toggle() }
+        }
+        .onExitCommand {
+            if showControls {
+                withAnimation { showControls = false }
+            } else {
+                dismiss()
+            }
+        }
+        .onChange(of: showControls) { _, shown in
+            if shown {
+                // Move focus into the controls so the menu is actually navigable
+                // (otherwise focus stays on the tiles and Close is unreachable).
+                DispatchQueue.main.async { focusedControl = 4 }
+            } else {
+                focusedControl = nil
+            }
         }
         .fullScreenCover(item: $pickerTarget) { target in
             MultiViewChannelPicker { channel in
@@ -98,48 +117,56 @@ struct MultiViewPlayer: View {
 
     @ViewBuilder
     private var controlsBar: some View {
-        HStack(spacing: 24) {
-            ForEach(MultiViewLayout.allCases) { option in
-                controlButton(
-                    title: option.title,
-                    systemImage: option.systemImage,
-                    isOn: layout == option
-                ) {
-                    withAnimation { layout = option }
+        if showControls {
+            HStack(spacing: 24) {
+                ForEach(Array(MultiViewLayout.allCases.enumerated()), id: \.element.id) { index, option in
+                    controlButton(
+                        focusID: index,
+                        title: option.title,
+                        systemImage: option.systemImage,
+                        isOn: layout == option
+                    ) {
+                        withAnimation { layout = option }
+                    }
+                }
+
+                controlButton(focusID: 3, title: "Swap", systemImage: "arrow.left.arrow.right") {
+                    primaryTile = primaryTile == 0 ? 1 : 0
+                }
+
+                controlButton(focusID: 4, title: "Close", systemImage: "xmark") {
+                    dismiss()
                 }
             }
-
-            controlButton(title: "Swap", systemImage: "arrow.left.arrow.right") {
-                primaryTile = primaryTile == 0 ? 1 : 0
-            }
-
-            controlButton(title: "Close", systemImage: "xmark") {
-                dismiss()
-            }
+            .padding(30)
+            .background(.black.opacity(0.6), in: Capsule())
+            .padding(.bottom, 50)
+            .focusSection()
+            .transition(.move(edge: .bottom).combined(with: .opacity))
         }
-        .padding(30)
-        .background(.black.opacity(0.6), in: Capsule())
-        .padding(.bottom, 50)
-        .opacity(showControls ? 1 : 0)
-        .animation(.easeInOut, value: showControls)
     }
 
     @ViewBuilder
     private func controlButton(
+        focusID: Int,
         title: String,
         systemImage: String,
         isOn: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
+        let isFocused = focusedControl == focusID
         Button(action: action) {
             Label(title, systemImage: systemImage)
                 .font(.headline)
                 .padding(.horizontal, 24)
                 .padding(.vertical, 16)
-                .background(isOn ? Color.accentColor : Color.white.opacity(0.15))
+                .background(isOn ? Color.accentColor : Color.white.opacity(isFocused ? 0.4 : 0.15))
                 .clipShape(Capsule())
         }
         .buttonStyle(.plain)
+        .focused($focusedControl, equals: focusID)
+        .scaleEffect(isFocused ? 1.08 : 1)
+        .animation(.easeOut(duration: 0.15), value: isFocused)
     }
 
     private func setActiveAudio(_ index: Int) {
