@@ -237,12 +237,19 @@ extension MediaPlayerItem {
             }
 
             // Caller-supplied transcode constraints (e.g. multi-view forcing a low-res SDR
-            // stream via MaxWidth / MaxVideoBitDepth / VideoBitrate) appended verbatim.
-            for (key, value) in additionalTranscodeParameters
-                where !transcodingPathToUse.localizedCaseInsensitiveContains(key)
-            {
-                let separator = transcodingPathToUse.contains("?") ? "&" : "?"
-                transcodingPathToUse += "\(separator)\(key)=\(value)"
+            // stream via MaxWidth / MaxVideoBitDepth / VideoBitrate). These must override any
+            // value the server already baked into the transcoding URL (e.g. a profile-derived
+            // MaxVideoBitDepth=10), so replace an existing key in place rather than skipping it.
+            for (key, value) in additionalTranscodeParameters {
+                let escapedKey = NSRegularExpression.escapedPattern(for: key)
+                let pattern = "(?i)([?&])\(escapedKey)=[^&]*"
+                if let range = transcodingPathToUse.range(of: pattern, options: .regularExpression) {
+                    let separator = transcodingPathToUse[range].first.map(String.init) ?? "&"
+                    transcodingPathToUse.replaceSubrange(range, with: "\(separator)\(key)=\(value)")
+                } else {
+                    let separator = transcodingPathToUse.contains("?") ? "&" : "?"
+                    transcodingPathToUse += "\(separator)\(key)=\(value)"
+                }
             }
 
             guard let url = userSession.client.url(path: transcodingPathToUse) else {
