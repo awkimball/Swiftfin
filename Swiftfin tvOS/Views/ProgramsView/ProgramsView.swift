@@ -35,6 +35,13 @@ struct ProgramsView: View {
                 ) {
                     router.route(to: .channels)
                 }
+
+                liveTVSectionButton(
+                    title: "Multi-View",
+                    systemImage: "rectangle.split.2x1"
+                ) {
+                    router.route(to: .multiView())
+                }
             }
             .edgePadding(.horizontal)
         }

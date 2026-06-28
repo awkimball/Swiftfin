@@ -27,6 +27,7 @@ extension MediaPlayerItem {
         requestedBitrate: PlaybackBitrate = Defaults[.VideoPlayer.Playback.appMaximumBitrate],
         compatibilityMode: PlaybackCompatibility = Defaults[.VideoPlayer.Playback.compatibilityMode],
         forceVideoReencode: Bool = false,
+        additionalTranscodeParameters: [String: String] = [:],
         modifyItem: ((inout BaseItemDto) -> Void)? = nil
     ) async throws -> MediaPlayerItem {
 
@@ -134,6 +135,7 @@ extension MediaPlayerItem {
             playSessionID: playSessionID,
             userSession: userSession,
             forceVideoReencode: forceVideoReencode,
+            additionalTranscodeParameters: additionalTranscodeParameters,
             logger: logger
         )
 
@@ -191,6 +193,7 @@ extension MediaPlayerItem {
         playSessionID: String,
         userSession: UserSession,
         forceVideoReencode: Bool = false,
+        additionalTranscodeParameters: [String: String] = [:],
         logger: Logger
     ) throws -> URL {
 
@@ -231,6 +234,15 @@ extension MediaPlayerItem {
             if !item.isLiveStream, hasTextSubtitles, !transcodingPathToUse.localizedCaseInsensitiveContains("CopyTimestamps") {
                 let separator = transcodingPathToUse.contains("?") ? "&" : "?"
                 transcodingPathToUse += "\(separator)CopyTimestamps=true"
+            }
+
+            // Caller-supplied transcode constraints (e.g. multi-view forcing a low-res SDR
+            // stream via MaxWidth / MaxVideoBitDepth / VideoBitrate) appended verbatim.
+            for (key, value) in additionalTranscodeParameters
+                where !transcodingPathToUse.localizedCaseInsensitiveContains(key)
+            {
+                let separator = transcodingPathToUse.contains("?") ? "&" : "?"
+                transcodingPathToUse += "\(separator)\(key)=\(value)"
             }
 
             guard let url = userSession.client.url(path: transcodingPathToUse) else {
