@@ -95,11 +95,18 @@ extension NativeVideoPlayer {
         private let proxy: AVMediaPlayerProxy
         private let manager: MediaPlayerManager
         private var itemStatusObserver: NSKeyValueObservation?
-        #if os(tvOS)
         private static let logger = Logger.swiftfin()
         private var selectedSubtitleRenditionOffset: Int?
         private var playbackInfoController: UIViewController?
         private var playbackInfoModel: PlaybackInfoModel?
+        #if !os(tvOS)
+        private var menuButton: UIButton?
+        private var overflowButton: UIButton?
+        private var customMenuItems: [UIMenuElement] = []
+        private var didObserveOverflowMenu = false
+        private var didAttachMenuButton = false
+        private static let customMenuIdentifier = UIMenu.Identifier("dev.addison.swiftfin.nativePlayerMenu")
+        private static let overflowMenuKVOContext = UnsafeMutableRawPointer.allocate(byteCount: 1, alignment: 1)
         #endif
 
         init(proxy: AVMediaPlayerProxy, manager: MediaPlayerManager) {
@@ -117,6 +124,9 @@ extension NativeVideoPlayer {
 
             #if os(tvOS)
             appliesPreferredDisplayCriteriaAutomatically = true
+            #else
+            updatesNowPlayingInfoCenter = false
+            #endif
 
             itemStatusObserver = player?.observe(
                 \.currentItem?.status,
@@ -125,14 +135,11 @@ extension NativeVideoPlayer {
                 guard player.currentItem?.status == .readyToPlay else { return }
                 Task { @MainActor in
                     self?.rebuildTransportBarMenus()
+                    #if os(tvOS)
                     self?.updateExternalMetadata()
+                    #endif
                 }
             }
-            #endif
-
-            #if !os(tvOS)
-            updatesNowPlayingInfoCenter = false
-            #endif
         }
 
         @available(*, unavailable)
@@ -140,7 +147,167 @@ extension NativeVideoPlayer {
             fatalError("init(coder:) has not been implemented")
         }
 
-        #if os(tvOS)
+        #if !os(tvOS)
+        deinit {
+            if didObserveOverflowMenu {
+                overflowButton?.removeObserver(self, forKeyPath: "menu", context: Self.overflowMenuKVOContext)
+            }
+        }
+
+        /// AVKit owns the overflow button and rebuilds its `menu` whenever its state changes (tracks
+        /// load, route/PiP changes, controls re-show), which drops our injected items. Observing the
+        /// `menu` property lets us re-inject whenever AVKit replaces it. `injectIntoOverflowMenu` is
+        /// idempotent (skips when our items are already present), so restoring after AVKit's rebuild
+        /// can't loop against our own update.
+        override nonisolated func observeValue(
+            forKeyPath keyPath: String?,
+            of object: Any?,
+            change: [NSKeyValueChangeKey: Any]?,
+            context: UnsafeMutableRawPointer?
+        ) {
+            guard context == Self.overflowMenuKVOContext else {
+                super.observeValue(forKeyPath: keyPath, of: object, change: change, context: context)
+                return
+            }
+            DispatchQueue.main.async { [weak self] in
+                self?.injectIntoOverflowMenu(force: false)
+            }
+        }
+
+        override func viewDidLoad() {
+            super.viewDidLoad()
+            setupMenuButton()
+            rebuildTransportBarMenus()
+        }
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            attachMenuButtonToControls()
+        }
+
+        /// iOS `AVPlayerViewController` has no transport-bar custom menu API (that's tvOS only),
+        /// so the shared audio/subtitle/settings `UIMenu`s are hosted on an overlay gear button
+        /// that we splice into the native controls next to the "•••" overflow menu.
+        private func setupMenuButton() {
+            let button = UIButton(type: .system)
+            button.translatesAutoresizingMaskIntoConstraints = false
+            let symbolConfiguration = UIImage.SymbolConfiguration(pointSize: 18, weight: .medium)
+            button.setImage(
+                UIImage(systemName: "gearshape.fill", withConfiguration: symbolConfiguration),
+                for: .normal
+            )
+            button.tintColor = .white
+            button.showsMenuAsPrimaryAction = true
+            menuButton = button
+        }
+
+        /// Splices the gear button into the native controls. `AVPlayerViewController` exposes no
+        /// controls API on iOS, but the controls' auxiliary row (`AVMobileAuxiliaryControlsView`,
+        /// which holds the "•••" overflow button) is a stack view. Inserting the gear as a real
+        /// arranged control makes the row grow to include it, so it fades with the chrome, stays
+        /// hit-testable (a button merely placed beside the content-sized row would fall outside its
+        /// bounds and receive no touches), and sits natively next to the "•••". If the row isn't a
+        /// stack view (e.g. a future iOS reworks it), the custom items are folded into the native
+        /// "•••" overflow menu instead. The row may not exist on the first pass, so this retries.
+        private func attachMenuButtonToControls(attempt: Int = 0) {
+            guard !didAttachMenuButton, let button = menuButton else { return }
+
+            guard let auxiliaryRow = Self.findView(in: view, classNameContains: "AuxiliaryControlsView") else {
+                if attempt < 10 {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                        self?.attachMenuButtonToControls(attempt: attempt + 1)
+                    }
+                } else {
+                    Self.logger.warning("Native iOS player: auxiliary controls row not found; gear button omitted")
+                }
+                return
+            }
+
+            didAttachMenuButton = true
+
+            if let stack = auxiliaryRow as? UIStackView {
+                stack.insertArrangedSubview(button, at: 0)
+                NSLayoutConstraint.activate([
+                    button.widthAnchor.constraint(equalToConstant: 23),
+                    button.heightAnchor.constraint(equalToConstant: 23),
+                ])
+                rebuildTransportBarMenus()
+            } else if let overflow = Self.findOverflowButton(in: auxiliaryRow) {
+                // The gear can't be hosted as a real control, so fold our items into the native
+                // "•••" menu (preserving its existing entries like Playback Speed) instead, and observe
+                // the button so we can re-inject when AVKit rebuilds its menu.
+                menuButton = nil
+                overflowButton = overflow
+                overflow.addObserver(self, forKeyPath: "menu", options: [.new], context: Self.overflowMenuKVOContext)
+                didObserveOverflowMenu = true
+                rebuildTransportBarMenus()
+                Self.logger.info("Native iOS player: folded custom menu into the ••• overflow control (auto re-injecting)")
+            } else {
+                Self.logger.warning("Native iOS player: could not host custom menu")
+            }
+        }
+
+        /// Applies the built menu to whichever host is active: the gear button when it was spliced
+        /// into the controls, or the native "•••" overflow button when we fell back to it.
+        private func applyMenu(_ items: [UIMenuElement]) {
+            customMenuItems = items
+            menuButton?.menu = UIMenu(title: "", children: items)
+            if overflowButton != nil {
+                injectIntoOverflowMenu(force: true)
+            }
+        }
+
+        /// Folds the custom items into the native "•••" overflow menu, after AVKit's own entries.
+        /// Reads the button's CURRENT children live (rather than a stale snapshot) so AVKit's dynamic
+        /// entries — including any deferred track lists — stay intact, then strips any previously
+        /// injected copy of ours (matched by identifier) and re-appends the latest items. When
+        /// `force` is false it no-ops if our items are already present, so the KVO re-injection is
+        /// safe to call repeatedly without looping.
+        private func injectIntoOverflowMenu(force: Bool) {
+            guard let overflowButton, !customMenuItems.isEmpty else { return }
+
+            let currentChildren = overflowButton.menu?.children ?? []
+            let alreadyPresent = currentChildren.contains { ($0 as? UIMenu)?.identifier == Self.customMenuIdentifier }
+            guard force || !alreadyPresent else { return }
+
+            let nativeChildren = currentChildren.filter { ($0 as? UIMenu)?.identifier != Self.customMenuIdentifier }
+            let customMenu = UIMenu(
+                title: "",
+                image: nil,
+                identifier: Self.customMenuIdentifier,
+                options: .displayInline,
+                children: customMenuItems
+            )
+            overflowButton.menu = UIMenu(title: "", children: nativeChildren + [customMenu])
+        }
+
+        /// Recursively searches a view subtree for the first descendant whose class name contains
+        /// the given substring.
+        private static func findView(in view: UIView, classNameContains needle: String) -> UIView? {
+            if String(describing: type(of: view)).contains(needle) {
+                return view
+            }
+            for subview in view.subviews {
+                if let found = findView(in: subview, classNameContains: needle) {
+                    return found
+                }
+            }
+            return nil
+        }
+
+        /// Recursively searches for the native "•••" overflow button (`AVControlOverflowButton`).
+        private static func findOverflowButton(in view: UIView) -> UIButton? {
+            if let button = view as? UIButton, String(describing: type(of: view)).contains("OverflowButton") {
+                return button
+            }
+            for subview in view.subviews {
+                if let found = findOverflowButton(in: subview) {
+                    return found
+                }
+            }
+            return nil
+        }
+        #endif
 
         @MainActor
         private func rebuildTransportBarMenus() {
@@ -152,7 +319,12 @@ extension NativeVideoPlayer {
                 items.append(subtitleMenu)
             }
             items.append(settingsMenu())
+
+            #if os(tvOS)
             transportBarCustomMenuItems = items
+            #else
+            applyMenu(items)
+            #endif
         }
 
         /// Lists the source's audio tracks. Selecting one drives the existing track-change path,
@@ -321,6 +493,7 @@ extension NativeVideoPlayer {
             rebuildTransportBarMenus()
         }
 
+        #if os(tvOS)
         @MainActor
         private func updateExternalMetadata() {
             guard let posterURL = manager.item.imageSource(.primary, maxWidth: 600).url else { return }
@@ -349,8 +522,6 @@ extension NativeVideoPlayer {
         #endif
     }
 }
-
-#if os(tvOS)
 
 @MainActor
 private final class PlaybackInfoModel: ObservableObject {
@@ -585,5 +756,3 @@ private struct PlaybackInfoOverlay: View {
         }
     }
 }
-
-#endif
