@@ -24,38 +24,22 @@ struct MultiViewTile: View {
     private var isFocused = false
 
     var body: some View {
-        ZStack {
-            Color.black
+        GeometryReader { geometry in
+            let video = videoSize(in: geometry.size)
 
-            if model.channel != nil {
-                PlayerLayerView(proxy: model.proxy)
-            } else {
-                VStack(spacing: 12) {
-                    Image(systemName: "plus.circle")
-                        .font(.system(size: 60))
-                    Text("Add Channel")
-                        .font(.headline)
-                }
-                .foregroundStyle(.white.opacity(0.8))
-            }
+            ZStack {
+                Color.black
 
-            // Audio indicator + channel label
-            VStack {
-                Spacer()
-                HStack(spacing: 8) {
-                    Image(systemName: isActiveAudio ? "speaker.wave.2.fill" : "speaker.slash.fill")
-                    if let title = model.channel?.displayTitle {
-                        Text(title)
-                            .lineLimit(1)
-                    }
-                    Spacer()
+                // Full-bleed video, letterboxed within the cell by its true aspect.
+                if model.channel != nil {
+                    PlayerLayerView(proxy: model.proxy)
+                } else {
+                    placeholder
                 }
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .background(.black.opacity(0.45))
-                .opacity(model.channel == nil ? 0 : (isFocused || isActiveAudio ? 1 : 0))
+
+                // Channel pill, placed in the letterbox bar so it never covers the picture.
+                pill
+                    .position(pillCenter(cell: geometry.size, video: video))
             }
         }
         .contentShape(Rectangle())
@@ -65,15 +49,72 @@ struct MultiViewTile: View {
         }
         .focusEffectDisabled()
         .onTapGesture(perform: onSelect)
+    }
+
+    @ViewBuilder
+    private var placeholder: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "plus.circle")
+                .font(.system(size: 60))
+            Text("Add Channel")
+                .font(.headline)
+        }
+        .foregroundStyle(.white.opacity(0.8))
+    }
+
+    /// A tvOS pill: channel name plus a speaker glyph. The background stays a constant
+    /// frosted translucency; the active-audio tile is shown by lighting up the icon, text,
+    /// and accent border (with a soft accent glow) rather than a solid fill.
+    private var pill: some View {
+        HStack(spacing: 10) {
+            Image(systemName: isActiveAudio ? "speaker.wave.2.fill" : "speaker.slash.fill")
+                .foregroundStyle(isActiveAudio ? Color.accentColor : Color.white.opacity(0.45))
+
+            Text(model.channel?.displayTitle ?? "Add Channel")
+                .lineLimit(1)
+                .foregroundStyle(isActiveAudio ? .white : .white.opacity(0.6))
+        }
+        .font(.callout.weight(.semibold))
+        .padding(.horizontal, 22)
+        .padding(.vertical, 12)
+        .background(.ultraThinMaterial, in: Capsule())
         .overlay {
-            // Only the focused tile draws a ring, inset so adjacent tiles don't
-            // stack their borders into a seam down the center. Active-audio state
-            // is conveyed by the speaker chip instead.
-            if isFocused {
-                Rectangle()
-                    .inset(by: 3)
-                    .strokeBorder(Color.accentColor, lineWidth: 6)
-            }
+            Capsule()
+                .strokeBorder(
+                    isActiveAudio ? Color.accentColor : Color.white.opacity(0.15),
+                    lineWidth: isActiveAudio ? 3 : 1
+                )
+        }
+        .shadow(color: isActiveAudio ? Color.accentColor.opacity(0.6) : .clear, radius: 10)
+        .scaleEffect(isActiveAudio ? 1.04 : 1)
+        .animation(.easeOut(duration: 0.18), value: isActiveAudio)
+    }
+
+    /// The displayed picture size (assumes 16:9 live content) used to locate the letterbox bars.
+    private func videoSize(in cell: CGSize) -> CGSize {
+        let videoAspect: CGFloat = 16.0 / 9.0
+        if cell.width / cell.height > videoAspect {
+            // Height-constrained: full height, bars run left/right.
+            return CGSize(width: cell.height * videoAspect, height: cell.height)
+        } else {
+            // Width-constrained: full width, bars run top/bottom.
+            return CGSize(width: cell.width, height: cell.width / videoAspect)
+        }
+    }
+
+    /// Centers the pill in the bottom letterbox bar when one exists (side-by-side / one-larger),
+    /// the bottom of a side bar when bars run left/right (stacked), else just inside the bottom edge.
+    private func pillCenter(cell: CGSize, video: CGSize) -> CGPoint {
+        let bottomBar = (cell.height - video.height) / 2
+        let sideBar = (cell.width - video.width) / 2
+        let inset: CGFloat = 46
+
+        if bottomBar >= inset {
+            return CGPoint(x: cell.width / 2, y: cell.height / 2 + video.height / 2 + bottomBar / 2)
+        } else if sideBar >= 80 {
+            return CGPoint(x: sideBar / 2, y: cell.height - inset)
+        } else {
+            return CGPoint(x: cell.width / 2, y: cell.height - inset)
         }
     }
 }
@@ -97,6 +138,8 @@ private final class PlayerLayerUIView: UIView {
     init(playerLayer: AVPlayerLayer) {
         self.playerLayer = playerLayer
         super.init(frame: .zero)
+        // Fill the cell width and letterbox by the video's true aspect; the pill is placed
+        // in the resulting bars so it never overlaps the picture.
         playerLayer.videoGravity = .resizeAspect
         layer.addSublayer(playerLayer)
     }

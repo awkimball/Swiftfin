@@ -155,17 +155,29 @@ struct MultiViewPlayer: View {
         action: @escaping () -> Void
     ) -> some View {
         let isFocused = focusedControl == focusID
+        // Constant frosted background; highlight is conveyed by lighting up the label and
+        // border (plus a soft accent glow), not by a solid fill. `isOn` (active layout)
+        // tints the label accent even when not focused.
+        let label: Color = isFocused ? .white : (isOn ? .accentColor : .white.opacity(0.55))
+        let border: Color = isFocused ? .accentColor : (isOn ? Color.accentColor.opacity(0.7) : .white.opacity(0.15))
+
         Button(action: action) {
             Label(title, systemImage: systemImage)
                 .font(.headline)
+                .foregroundStyle(label)
                 .padding(.horizontal, 24)
                 .padding(.vertical, 16)
-                .background(isOn ? Color.accentColor : Color.white.opacity(isFocused ? 0.4 : 0.15))
-                .clipShape(Capsule())
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay {
+                    Capsule()
+                        .strokeBorder(border, lineWidth: isFocused ? 3 : 1)
+                }
         }
         .buttonStyle(.plain)
+        .focusEffectDisabled()
         .focused($focusedControl, equals: focusID)
-        .scaleEffect(isFocused ? 1.08 : 1)
+        .scaleEffect(isFocused ? 1.06 : 1)
+        .shadow(color: isFocused ? Color.accentColor.opacity(0.5) : .clear, radius: 10)
         .animation(.easeOut(duration: 0.15), value: isFocused)
     }
 
