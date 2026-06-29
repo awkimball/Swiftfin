@@ -11,6 +11,7 @@ import Combine
 import Defaults
 import Foundation
 @preconcurrency import JellyfinAPI
+import Logging
 import SwiftUI
 
 // TODO: After NativeVideoPlayer is removed, can move bindings and
@@ -33,6 +34,8 @@ class AVMediaPlayerProxy: VideoMediaPlayerProxy {
     let avPlayerLayer: AVPlayerLayer
     let player: AVPlayer
 
+    private static let logger = Logger.swiftfin()
+
 //    private var rateObserver: NSKeyValueObservation!
     private var statusObserver: NSKeyValueObservation!
     private var timeControlStatusObserver: NSKeyValueObservation!
@@ -47,6 +50,7 @@ class AVMediaPlayerProxy: VideoMediaPlayerProxy {
     // One-shot startup watchdog: a non-forced live source that AVPlayer can't start
     // (decode failure or silent spin) escalates once to a forced server-side re-encode.
     private var liveStartupWatchdog: Task<Void, Never>?
+    private var forcedLiveWarmReload: Task<Void, Never>?
 
     // A live transcode needs a few seconds to produce its first segments; AVPlayer can
     // fail the item while the variant playlist still 404s. Reload the same URL (keeping
@@ -61,7 +65,8 @@ class AVMediaPlayerProxy: VideoMediaPlayerProxy {
     // plays within this window via warm reloads; an undecodable copy (e.g. HDR/DoVi HEVC)
     // that silently stalls without ever emitting a .failed error falls back promptly
     // instead of reloading for tens of seconds.
-    private let liveRecoveryBudget: TimeInterval = 13
+    private let liveRecoveryBudget: TimeInterval = 8
+    private let forcedLiveRecoveryBudget: TimeInterval = 20
     private var liveRecoveryDeadline: Date?
 
     weak var manager: MediaPlayerManager? {
@@ -127,6 +132,7 @@ class AVMediaPlayerProxy: VideoMediaPlayerProxy {
 
     deinit {
         liveStartupWatchdog?.cancel()
+        forcedLiveWarmReload?.cancel()
         if let timeObserver {
             player.removeTimeObserver(timeObserver)
         }
@@ -145,6 +151,17 @@ class AVMediaPlayerProxy: VideoMediaPlayerProxy {
 
     func stop() {
         player.pause()
+    }
+
+    func prepareForLiveFallback() {
+        player.pause()
+        player.replaceCurrentItem(with: nil)
+        liveStartupWatchdog?.cancel()
+        liveStartupWatchdog = nil
+        forcedLiveWarmReload?.cancel()
+        forcedLiveWarmReload = nil
+        liveRecoveryDeadline = nil
+        currentLiveItem = nil
     }
 
     func jumpForward(_ seconds: Duration) {
@@ -186,6 +203,8 @@ extension AVMediaPlayerProxy {
 
         liveStartupWatchdog?.cancel()
         liveStartupWatchdog = nil
+        forcedLiveWarmReload?.cancel()
+        forcedLiveWarmReload = nil
         liveRecoveryDeadline = nil
         currentLiveItem = nil
 
@@ -237,7 +256,13 @@ extension AVMediaPlayerProxy {
                 // Reload the now-warm URL while we're still within the recovery budget; once
                 // it elapses, an undecodable copy that silently stalls (no .failed error) is
                 // downgraded to a forced server re-encode rather than reloading indefinitely.
-                if self.canAttemptLiveRecovery {
+                if self.canAttemptLiveRecovery || self.currentLiveItem?.forcedVideoReencode == true {
+                    if self.currentLiveItem?.forcedVideoReencode == true, !self.canAttemptLiveRecovery {
+                        Self.logger.info(
+                            "Reloading warmed forced live transcode after recovery budget",
+                            metadata: self.liveFailureMetadata()
+                        )
+                    }
                     self.reloadLiveItem(rearmTimeout: self.liveReloadTimeout)
                 } else {
                     self.manager?.fallbackToVideoTranscode()
@@ -248,22 +273,44 @@ extension AVMediaPlayerProxy {
 
     private func handleLiveFailure() {
         guard currentLiveItem != nil else {
+            Self.logger.warning("AVPlayer live failure with no current live item", metadata: liveFailureMetadata())
             manager?.fallbackToVideoTranscode()
             return
         }
 
-        // -12927 = AVPlayer can't decode the media (e.g. an HDR or MPEG-2 copy); that needs
-        // a forced server re-encode immediately. Other failures during live startup are
-        // transient (the variant playlist/segments briefly 404 while ffmpeg warms up), so
-        // reload the same URL while within the recovery budget to keep the play session and
-        // live stream alive; once it elapses, escalate to a forced re-encode.
-        let errorCode = (player.currentItem?.error as NSError?)?.code
+        Self.logger.warning("AVPlayer live failure", metadata: liveFailureMetadata())
 
-        if errorCode == -12927 || !canAttemptLiveRecovery {
-            manager?.fallbackToVideoTranscode()
-        } else {
+        // Live HLS can fail or stall before the server has produced enough initial fMP4
+        // segments. Prefer reloading the same warmed URL during the recovery window so we
+        // keep one play session and one server job alive; only escalate after the budget.
+        if canAttemptLiveRecovery || currentLiveItem?.forcedVideoReencode == true {
+            Self.logger.info("Reloading live item during recovery window", metadata: liveFailureMetadata())
             reloadLiveItem(rearmTimeout: liveReloadTimeout)
+        } else {
+            Self.logger.warning("Live recovery budget exhausted; falling back to forced video transcode", metadata: liveFailureMetadata())
+            manager?.fallbackToVideoTranscode()
         }
+    }
+
+    private func liveFailureMetadata() -> Logger.Metadata {
+        let itemError = player.currentItem?.error as NSError?
+        let playerError = player.error as NSError?
+        let lastErrorEvent = player.currentItem?.errorLog()?.events.last
+
+        return [
+            "itemStatus": "\(player.currentItem?.status.rawValue ?? -1)",
+            "timeControlStatus": "\(player.timeControlStatus.rawValue)",
+            "itemErrorDomain": "\(itemError?.domain ?? "nil")",
+            "itemErrorCode": "\(itemError?.code ?? 0)",
+            "itemErrorDescription": "\(itemError?.localizedDescription ?? "nil")",
+            "playerErrorDomain": "\(playerError?.domain ?? "nil")",
+            "playerErrorCode": "\(playerError?.code ?? 0)",
+            "errorLogDomain": "\(lastErrorEvent?.errorDomain ?? "nil")",
+            "errorLogCode": "\(lastErrorEvent?.errorStatusCode ?? 0)",
+            "errorLogComment": "\(lastErrorEvent?.errorComment ?? "nil")",
+            "uri": "\(lastErrorEvent?.uri ?? "nil")",
+            "canAttemptLiveRecovery": "\(canAttemptLiveRecovery)"
+        ]
     }
 
     /// Whether there is still time in the live startup recovery budget to attempt another
@@ -289,18 +336,43 @@ extension AVMediaPlayerProxy {
         }
     }
 
+    private func armForcedLiveWarmReloadIfNeeded(for item: MediaPlayerItem) {
+        forcedLiveWarmReload?.cancel()
+        forcedLiveWarmReload = nil
+
+        guard item.baseItem.isLiveStream == true, item.forcedVideoReencode else { return }
+
+        forcedLiveWarmReload = Task { [weak self, weak item] in
+            try? await Task.sleep(for: .seconds(4))
+            guard let self, let item, !Task.isCancelled else { return }
+            await MainActor.run {
+                guard self.currentLiveItem === item,
+                      self.player.timeControlStatus != .playing
+                else { return }
+
+                Self.logger.info("Reloading warmed forced live transcode")
+                self.player.replaceCurrentItem(with: self.makeAVPlayerItem(for: item))
+                self.armLiveStartupWatchdog(timeout: self.liveReloadTimeout)
+                self.play()
+            }
+        }
+    }
+
     private func playNew(item: MediaPlayerItem) {
         let baseItem = item.baseItem
         let isLiveStream = baseItem.isLiveStream == true
 
         currentLiveItem = isLiveStream ? item : nil
-        liveRecoveryDeadline = isLiveStream ? Date().addingTimeInterval(liveRecoveryBudget) : nil
+        liveRecoveryDeadline = isLiveStream
+            ? Date().addingTimeInterval(item.forcedVideoReencode ? forcedLiveRecoveryBudget : liveRecoveryBudget)
+            : nil
 
         let newAVPlayerItem = makeAVPlayerItem(for: item)
 
         player.replaceCurrentItem(with: newAVPlayerItem)
 
         armLiveStartupWatchdog(timeout: liveStartupTimeout)
+        armForcedLiveWarmReloadIfNeeded(for: item)
 
 //        rateObserver = player.observe(\.rate, options: [.new, .initial]) { _, value in
 //            DispatchQueue.main.async {
@@ -320,6 +392,8 @@ extension AVMediaPlayerProxy {
                 case .playing:
                     self?.liveStartupWatchdog?.cancel()
                     self?.liveStartupWatchdog = nil
+                    self?.forcedLiveWarmReload?.cancel()
+                    self?.forcedLiveWarmReload = nil
                     self?.liveRecoveryDeadline = nil
                     self?.manager?.setPlaybackRequestStatus(status: .playing)
                 @unknown default: ()

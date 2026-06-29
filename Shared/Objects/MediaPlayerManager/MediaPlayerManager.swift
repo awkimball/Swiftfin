@@ -310,20 +310,19 @@ final class MediaPlayerManager: ViewModel {
             didFallbackToVideoTranscode = true
             forcedTranscodeAttempts = 1
             logger.info("Native live playback failed; falling back to forced video transcode")
-            try await updateMediaPlayerItem(
-                currentItem: currentItem,
-                forceVideoReencode: true
-            )
-        } else if currentItem.forcedVideoReencode, forcedTranscodeAttempts < maxForcedTranscodeAttempts {
-            // Forced playback failed too, usually transient channel-switch churn.
-            // Rebuild the forced item after a brief settle so the server stabilizes.
-            forcedTranscodeAttempts += 1
-            logger.info("Forced transcode failed; retrying (attempt \(forcedTranscodeAttempts))")
+            if let proxy = proxy as? AVMediaPlayerProxy {
+                proxy.prepareForLiveFallback()
+            } else {
+                proxy?.stop()
+            }
+            await stopActiveEncodings()
             try? await Task.sleep(for: .seconds(2))
             try await updateMediaPlayerItem(
                 currentItem: currentItem,
                 forceVideoReencode: true
             )
+        } else if currentItem.forcedVideoReencode {
+            logger.info("Forced transcode failed; keeping the existing live transcode session warm")
         }
     }
 
@@ -335,6 +334,15 @@ final class MediaPlayerManager: ViewModel {
             currentItem: currentItem,
             requestedBitrate: requestedBitrate
         )
+    }
+
+    private func stopActiveEncodings() async {
+        guard let userSession = Container.shared.currentUserSession(),
+              let deviceID = try? userSession.client.configuration.deviceID
+        else { return }
+
+        let request = Paths.stopEncodingProcess(deviceID: deviceID, playSessionID: "")
+        _ = try? await userSession.client.send(request)
     }
 
     @Function(\Action.Cases.setPlaybackRequestStatus)

@@ -76,11 +76,17 @@ extension MediaPlayerItem {
         var playbackInfo = PlaybackInfoDto()
         playbackInfo.isAutoOpenLiveStream = true
         playbackInfo.deviceProfile = deviceProfile
-        playbackInfo.liveStreamID = initialMediaSource.liveStreamID
+        if !forceVideoReencode {
+            playbackInfo.liveStreamID = initialMediaSource.liveStreamID
+        }
         playbackInfo.maxStreamingBitrate = maxBitrate
         playbackInfo.userID = userSession.user.id
         playbackInfo.audioStreamIndex = audioStreamIndex
-        playbackInfo.subtitleStreamIndex = subtitleStreamIndex
+        let hasSubtitleStreams = initialMediaSource.mediaStreams?
+            .contains { $0.type == .subtitle } ?? false
+        if subtitleStreamIndex != -1 || hasSubtitleStreams {
+            playbackInfo.subtitleStreamIndex = subtitleStreamIndex
+        }
 
         if !item.isLiveStream {
             playbackInfo.mediaSourceID = initialMediaSource.id
@@ -254,6 +260,17 @@ extension MediaPlayerItem {
 
             guard let url = userSession.client.url(path: transcodingPathToUse) else {
                 throw ErrorMessage("Unable to make transcoding URL")
+            }
+
+            if item.isLiveStream,
+               forceVideoReencode,
+               url.path.hasSuffix("/master.m3u8"),
+               var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            {
+                components.path = components.path.replacingOccurrences(of: "/master.m3u8", with: "/live.m3u8")
+                if let variantURL = components.url {
+                    return variantURL
+                }
             }
 
             return url
