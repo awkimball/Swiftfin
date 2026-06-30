@@ -230,6 +230,19 @@ extension VideoPlayerType {
                 }
             }
         )
+
+        CodecProfile(
+            codec: AudioCodec.aac.rawValue,
+            type: .videoAudio,
+            conditions: {
+                ProfileCondition(
+                    condition: .equals,
+                    isRequired: false,
+                    property: .audioProfile,
+                    value: "LC"
+                )
+            }
+        )
     }
 
     @ArrayBuilder<VideoRangeType>

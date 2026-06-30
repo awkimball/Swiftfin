@@ -65,10 +65,6 @@ extension DeviceProfile {
             }
         }
 
-        // PoC: force HLS remux so audio and subtitle tracks are exposed in the
-        // manifest for the native menus to read.
-        deviceProfile.directPlayProfiles = []
-
         if deviceProfile.transcodingProfiles?.isEmpty ?? true {
             deviceProfile.transcodingProfiles = videoPlayer.transcodingProfiles
         }
