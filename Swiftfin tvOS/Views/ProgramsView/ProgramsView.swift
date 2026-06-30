@@ -34,6 +34,8 @@ struct ProgramsView: View {
     @State
     private var selectedSection: LiveTVSection = .guide
 
+    private let channelGridColumns = [GridItem](repeating: GridItem(.flexible(), spacing: 24), count: 5)
+
     @ViewBuilder
     private var liveTVNavigation: some View {
         HStack(spacing: 20) {
@@ -116,9 +118,68 @@ struct ProgramsView: View {
 
     @ViewBuilder
     private var channelsContentView: some View {
-        PagingLibraryView(library: ChannelLibrary())
-            .toolbar(.hidden, for: .navigationBar)
-            .padding(.top, 8)
+        if programsViewModel.channelPrograms.isNotEmpty {
+            ScrollView(showsIndicators: false) {
+                LazyVGrid(columns: channelGridColumns, spacing: 24) {
+                    ForEach(programsViewModel.channelPrograms) { channelProgram in
+                        channelGridButton(channelProgram.channel)
+                    }
+                }
+                .padding(.horizontal, 50)
+                .padding(.top, 8)
+                .padding(.bottom, 40)
+            }
+        } else {
+            ContentUnavailableView(L10n.noPrograms.localizedCapitalized, systemImage: "tv")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private func channelGridButton(_ channel: BaseItemDto) -> some View {
+        Button {
+            guard let userSession else { return }
+
+            router.route(
+                to: .videoPlayer(
+                    provider: channel.getPlaybackItemProvider(userSession: userSession)
+                )
+            )
+        } label: {
+            VStack(alignment: .leading, spacing: 14) {
+                ImageView(channel.imageSource(.primary, maxWidth: 120))
+                    .image { image in
+                        image
+                            .aspectRatio(contentMode: .fit)
+                    }
+                    .failure {
+                        Image(systemName: "tv")
+                            .font(.system(size: 44, weight: .regular))
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(height: 88)
+                    .frame(maxWidth: .infinity)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    if let channelNumber = channel.channelNumber, channelNumber.isNotEmpty {
+                        Text(channelNumber)
+                            .font(.caption.weight(.semibold))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Text(channel.displayTitle)
+                        .font(.callout.weight(.semibold))
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(18)
+            .frame(height: 178, alignment: .topLeading)
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(LightweightChannelGridButtonStyle())
+        .focusEffectDisabled()
     }
 
     @ViewBuilder
@@ -275,5 +336,17 @@ private struct LiveTVNavigationButtonStyle: ButtonStyle {
             .clipShape(Capsule())
             .animation(.easeInOut(duration: 0.12), value: isFocused)
             .animation(.easeInOut(duration: 0.12), value: isSelected)
+    }
+}
+
+private struct LightweightChannelGridButtonStyle: ButtonStyle {
+
+    @Environment(\.isFocused)
+    private var isFocused
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(.white)
+            .background(.white.opacity(isFocused ? 0.16 : 0.07), in: RoundedRectangle(cornerRadius: 8))
     }
 }

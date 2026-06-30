@@ -27,6 +27,7 @@ extension ProgramsView {
 
         private let channelColumnWidth: CGFloat = 260
         private let columnGridSpacing: CGFloat = 28
+        private let guideCellSpacing: CGFloat = 7
         private let hourWidth: CGFloat = 420
         private let rowHeight: CGFloat = 92
         private let headerHeight: CGFloat = 58
@@ -67,24 +68,15 @@ extension ProgramsView {
             ScrollView(.vertical, showsIndicators: false) {
                 LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
                     Section {
-                        HStack(alignment: .top, spacing: columnGridSpacing) {
-                            channelRows
-
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                programRows
-                            }
-                        }
-                        .padding(.horizontal, 50)
+                        guideRows
+                            .padding(.horizontal, 50)
                     } header: {
                         HStack(alignment: .top, spacing: columnGridSpacing) {
                             channelHeader
-
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                timeRuler
-                            }
+                            timeRuler
                         }
                         .padding(.horizontal, 50)
-                        .background(.ultraThinMaterial)
+                        .background(Color.black.opacity(0.35))
                         .zIndex(20)
                     }
                 }
@@ -102,20 +94,6 @@ extension ProgramsView {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .frame(width: channelColumnWidth, height: headerHeight, alignment: .leading)
-        }
-
-        private var channelRows: some View {
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(channelPrograms) { channelProgram in
-                    channelLabel(channelProgram.channel)
-                        .frame(width: channelColumnWidth, height: rowHeight, alignment: .leading)
-                        .background(alignment: .bottom) {
-                            Rectangle()
-                                .fill(.white.opacity(0.08))
-                                .frame(height: 1)
-                        }
-                }
-            }
         }
 
         private var timeRuler: some View {
@@ -159,23 +137,31 @@ extension ProgramsView {
         }
 
         @ViewBuilder
-        private var programRows: some View {
+        private var guideRows: some View {
             ZStack(alignment: .topLeading) {
-                VStack(alignment: .leading, spacing: 0) {
+                LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(channelPrograms) { channelProgram in
-                        programTimeline(for: channelProgram)
-                            .frame(width: guideWidth, height: rowHeight, alignment: .leading)
-                            .background(alignment: .bottom) {
-                                Rectangle()
-                                    .fill(.white.opacity(0.08))
-                                    .frame(height: 1)
-                            }
+                        HStack(alignment: .top, spacing: columnGridSpacing) {
+                            channelLabel(channelProgram.channel)
+                                .frame(width: channelColumnWidth, height: rowHeight - 14, alignment: .leading)
+                                .padding(.vertical, 7)
+
+                            programTimeline(for: channelProgram)
+                                .frame(width: guideWidth, height: rowHeight, alignment: .leading)
+                        }
+                        .frame(height: rowHeight, alignment: .leading)
+                        .frame(width: channelColumnWidth + columnGridSpacing + guideWidth, alignment: .leading)
+                        .background(alignment: .bottom) {
+                            Rectangle()
+                                .fill(.white.opacity(0.08))
+                                .frame(height: 1)
+                        }
                     }
                 }
 
                 currentTimeLine
             }
-            .frame(width: guideWidth, alignment: .topLeading)
+            .frame(width: channelColumnWidth + columnGridSpacing + guideWidth, alignment: .topLeading)
         }
 
         @ViewBuilder
@@ -184,19 +170,19 @@ extension ProgramsView {
                 Rectangle()
                     .fill(.red)
                     .frame(width: 3, height: CGFloat(channelPrograms.count) * rowHeight)
-                    .offset(x: currentTimeOffset - 1.5)
+                    .offset(x: channelColumnWidth + columnGridSpacing + currentTimeOffset - 1.5)
                     .zIndex(10)
                     .allowsHitTesting(false)
             }
         }
 
         private func programTimeline(for channelProgram: ChannelProgram) -> some View {
-            HStack(spacing: 4) {
+            HStack(spacing: guideCellSpacing) {
                 let segments = timelineSegments(for: channelProgram)
 
                 if segments.isEmpty {
                     emptyProgramCell(channel: channelProgram.channel)
-                        .frame(width: CGFloat(visibleHours) * hourWidth - 4, height: rowHeight - 14)
+                        .frame(width: CGFloat(visibleHours) * hourWidth - guideCellSpacing, height: rowHeight - 14)
                 } else {
                     ForEach(segments) { segment in
                         if let program = segment.program {
@@ -212,20 +198,14 @@ extension ProgramsView {
         }
 
         private func emptyProgramCell(channel: BaseItemDto) -> some View {
-            Button {
-                play(channel)
-            } label: {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(.white.opacity(0.05))
-                    .overlay(alignment: .leading) {
-                        Text("No guide data")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 18)
-                    }
-            }
-            .buttonStyle(GuideCellButtonStyle())
-            .focusEffectDisabled()
+            RoundedRectangle(cornerRadius: 8)
+                .fill(.white.opacity(0.05))
+                .overlay(alignment: .leading) {
+                    Text("No guide data")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 18)
+                }
         }
 
         private func channelLabel(_ channel: BaseItemDto) -> some View {
@@ -233,7 +213,7 @@ extension ProgramsView {
                 play(channel)
             } label: {
                 HStack(spacing: 16) {
-                    ImageView(channel.imageSource(.primary, maxWidth: 180))
+                    ImageView(channel.imageSource(.primary, maxWidth: 120))
                         .image { image in
                             image
                                 .aspectRatio(contentMode: .fit)
@@ -243,7 +223,7 @@ extension ProgramsView {
                                 .font(.title3)
                                 .foregroundStyle(.secondary)
                         }
-                        .frame(width: 72, height: 44)
+                        .frame(width: 64, height: 38)
 
                     VStack(alignment: .leading, spacing: 4) {
                         if let channelNumber = channel.channelNumber, channelNumber.isNotEmpty {
@@ -259,6 +239,7 @@ extension ProgramsView {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                .padding(.leading, 8)
                 .padding(.trailing, 22)
             }
             .buttonStyle(GuideChannelButtonStyle())
@@ -274,7 +255,7 @@ extension ProgramsView {
                         .font(.callout.weight(.semibold))
                         .lineLimit(1)
 
-                    HStack(spacing: 4) {
+                    HStack(spacing: 3) {
                         if let startDate = program.startDate {
                             Text(startDate, style: .time)
                         }
@@ -285,9 +266,11 @@ extension ProgramsView {
                             Text(endDate, style: .time)
                         }
                     }
-                    .font(.caption)
+                    .font(.caption2)
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
 
                     if let overview = program.overview, overview.isNotEmpty {
                         Text(overview)
@@ -336,7 +319,7 @@ extension ProgramsView {
                     ProgramTimelineSegment(
                         id: program.id ?? "\(channelProgram.id ?? "channel")-program-\(index)",
                         program: program,
-                        width: max(width(from: programStart, to: programEnd) - 4, 96)
+                        width: max(width(from: programStart, to: programEnd) - guideCellSpacing, 96)
                     )
                 )
 
@@ -378,44 +361,15 @@ private struct GuideCellButtonStyle: ButtonStyle {
 
     var isCurrent = false
 
-    @ViewBuilder
     func makeBody(configuration: Configuration) -> some View {
-        if #available(tvOS 26.0, *) {
-            glassBody(configuration)
-        } else {
-            legacyBody(configuration)
-        }
-    }
-
-    @available(tvOS 26.0, *)
-    private func glassBody(_ configuration: Configuration) -> some View {
         configuration.label
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-            .glassEffect(
-                .regular
-                    .tint(isCurrent ? Color.white.opacity(0.14) : nil)
-                    .interactive(isFocused),
-                in: RoundedRectangle(cornerRadius: 8)
-            )
+            .background(.white.opacity(isFocused ? 0.18 : (isCurrent ? 0.12 : 0.07)), in: RoundedRectangle(cornerRadius: 8))
             .overlay {
                 RoundedRectangle(cornerRadius: 8)
-                    .stroke(.white.opacity(isFocused ? 0.26 : 0.08), lineWidth: 1)
+                    .stroke(.white.opacity(isFocused ? 0.22 : 0.07), lineWidth: 1)
             }
-            .brightness(isFocused ? 0.08 : 0)
-            .animation(.easeInOut(duration: 0.12), value: isFocused)
-    }
-
-    private func legacyBody(_ configuration: Configuration) -> some View {
-        configuration.label
-            .foregroundStyle(.white)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-            .background(.white.opacity(isFocused ? 0.22 : (isCurrent ? 0.16 : 0.08)), in: RoundedRectangle(cornerRadius: 8))
-            .overlay {
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(.white.opacity(isFocused ? 0.26 : 0.08), lineWidth: 1)
-            }
-            .animation(.easeInOut(duration: 0.12), value: isFocused)
     }
 }
 
@@ -432,6 +386,5 @@ private struct GuideChannelButtonStyle: ButtonStyle {
                 RoundedRectangle(cornerRadius: 8)
                     .stroke(.white.opacity(isFocused ? 0.22 : 0), lineWidth: 1)
             }
-            .animation(.easeInOut(duration: 0.12), value: isFocused)
     }
 }
