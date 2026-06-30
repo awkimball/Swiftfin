@@ -79,12 +79,10 @@ private struct ChannelProgramLibraryGridElement: View {
             }
         } label: {
             VStack(alignment: .leading, spacing: 6) {
-                PosterImage(item: channelProgram.channel, type: resolvedLibraryStyle.posterDisplayType)
+                channelLogo
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .posterStyle(resolvedLibraryStyle.posterDisplayType)
                     .backport
                     .matchedTransitionSource(id: "item", in: namespace)
-                    .posterShadow()
 
                 VStack(alignment: .leading, spacing: 0) {
                     Text(channelProgram.displayTitle)
@@ -105,10 +103,77 @@ private struct ChannelProgramLibraryGridElement: View {
 //                    }
                 }
             }
+            .padding(18)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ChannelProgramGridButtonStyle())
         .foregroundStyle(.primary, .secondary)
     }
+
+    @ViewBuilder
+    private var channelLogo: some View {
+        ImageView(channelProgram.channel.imageSource(.primary, maxWidth: 300))
+            .image { image in
+                image
+                    .aspectRatio(contentMode: .fit)
+            }
+            .failure {
+                Image(systemName: "tv")
+                    .font(.system(size: 56, weight: .regular))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+private struct ChannelProgramGridButtonStyle: ButtonStyle {
+
+    @Environment(\.isFocused)
+    private var isFocused
+
+    @ViewBuilder
+    func makeBody(configuration: Configuration) -> some View {
+        #if os(tvOS)
+        if #available(tvOS 26.0, *) {
+            glassBody(configuration)
+        } else {
+            legacyBody(configuration)
+        }
+        #else
+        configuration.label
+        #endif
+    }
+
+    #if os(tvOS)
+    @available(tvOS 26.0, *)
+    private func glassBody(_ configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .glassEffect(
+                .regular
+                    .interactive(isFocused),
+                in: RoundedRectangle(cornerRadius: 8)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(.white.opacity(isFocused ? 0.26 : 0.08), lineWidth: 1)
+            }
+            .brightness(isFocused ? 0.08 : 0)
+            .animation(.easeInOut(duration: 0.12), value: isFocused)
+    }
+
+    private func legacyBody(_ configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(.white.opacity(isFocused ? 0.22 : 0.08), in: RoundedRectangle(cornerRadius: 8))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(.white.opacity(isFocused ? 0.26 : 0.08), lineWidth: 1)
+            }
+            .animation(.easeInOut(duration: 0.12), value: isFocused)
+    }
+    #endif
 }
 
 private struct ChannelProgramLibraryListElement: View {

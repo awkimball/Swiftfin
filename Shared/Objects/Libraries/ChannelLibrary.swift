@@ -19,17 +19,22 @@ struct ChannelLibrary: PagingLibrary {
         environment: Empty,
         pageState: LibraryPageState
     ) async throws -> [ChannelProgram] {
+        guard pageState.pageOffset == 0 else { return [] }
+
         var parameters = Paths.GetLiveTvChannelsParameters()
         parameters.fields = .MinimumFields
-        parameters.limit = pageState.pageSize
+        parameters.enableImages = true
+        parameters.limit = 1000
         parameters.sortBy = [.name]
         parameters.startIndex = pageState.pageOffset
 
         let request = Paths.getLiveTvChannels(parameters: parameters)
         let response = try await pageState.userSession.client.send(request)
+        let channels = (response.value.items ?? [])
+            .sorted(by: BaseItemDto.liveTVChannelSort)
 
         return try await getPrograms(
-            for: response.value.items ?? [],
+            for: channels,
             pageState: pageState
         )
     }
@@ -63,6 +68,6 @@ struct ChannelLibrary: PagingLibrary {
                     .sorted(using: \.startDate)
             }
             .map(ChannelProgram.init)
-            .sorted(using: \.channel.name)
+            .sorted(by: ChannelProgram.liveTVChannelSort)
     }
 }

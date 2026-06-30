@@ -56,3 +56,34 @@ struct ChannelProgram: Displayable, Hashable, Identifiable {
         }[safe: offset]
     }
 }
+
+extension BaseItemDto {
+
+    static func liveTVChannelSort(_ lhs: BaseItemDto, _ rhs: BaseItemDto) -> Bool {
+        let sortComparison = lhs.liveTVChannelSortKey.localizedStandardCompare(rhs.liveTVChannelSortKey)
+        if sortComparison != .orderedSame {
+            return sortComparison == .orderedAscending
+        }
+
+        return lhs.displayTitle.localizedStandardCompare(rhs.displayTitle) == .orderedAscending
+    }
+
+    private var liveTVChannelSortKey: String {
+        if let channelNumber, channelNumber.isNotEmpty {
+            return channelNumber
+        }
+
+        if let id, id.isNotEmpty {
+            return id
+        }
+
+        return displayTitle
+    }
+}
+
+extension ChannelProgram {
+
+    static func liveTVChannelSort(_ lhs: ChannelProgram, _ rhs: ChannelProgram) -> Bool {
+        BaseItemDto.liveTVChannelSort(lhs.channel, rhs.channel)
+    }
+}

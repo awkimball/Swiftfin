@@ -16,6 +16,12 @@ import SwiftUI
 
 struct ProgramsView: View {
 
+    private enum LiveTVSection: Hashable {
+        case channels
+        case guide
+        case onNow
+    }
+
     @Router
     private var router
 
@@ -25,57 +31,111 @@ struct ProgramsView: View {
     @StateObject
     private var programsViewModel = ProgramsViewModel()
 
-    @ViewBuilder
-    private var liveTVSectionScrollView: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 30) {
-                liveTVSectionButton(
-                    title: L10n.channels,
-                    systemImage: "play.square.stack"
-                ) {
-                    router.route(to: .channels)
-                }
+    @State
+    private var selectedSection: LiveTVSection = .guide
 
-                liveTVSectionButton(
-                    title: "Multi-View",
-                    systemImage: "rectangle.split.2x1"
-                ) {
-                    router.route(to: .multiView())
-                }
+    @ViewBuilder
+    private var liveTVNavigation: some View {
+        HStack(spacing: 20) {
+            liveTVNavigationButton(
+                title: "Guide",
+                systemImage: "list.bullet.rectangle",
+                isSelected: selectedSection == .guide
+            ) {
+                selectedSection = .guide
             }
-            .edgePadding(.horizontal)
-            .padding(.vertical)
+
+            liveTVNavigationButton(
+                title: "Programs",
+                systemImage: "play.rectangle.on.rectangle",
+                isSelected: selectedSection == .onNow
+            ) {
+                selectedSection = .onNow
+            }
+
+            liveTVNavigationButton(
+                title: L10n.channels,
+                systemImage: "play.square.stack",
+                isSelected: selectedSection == .channels
+            ) {
+                selectedSection = .channels
+            }
+
+            liveTVNavigationButton(
+                title: "Multi-View",
+                systemImage: "rectangle.split.2x1"
+            ) {
+                router.route(to: .multiView())
+            }
         }
-        .scrollClipDisabled()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 50)
+        .padding(.top, 28)
+        .padding(.bottom, 18)
     }
 
     @ViewBuilder
-    private func liveTVSectionButton(title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+    private func liveTVNavigationButton(
+        title: String,
+        systemImage: String,
+        isSelected: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
-            ZStack {
-                Color(UIColor.darkGray)
-                    .opacity(0.5)
+            HStack(spacing: 12) {
+                Image(systemName: systemImage)
+                    .font(.body.weight(.medium))
 
-                VStack(spacing: 20) {
-                    Image(systemName: systemImage)
-                        .font(.title)
-
-                    Text(title)
-                        .font(.title3)
-                }
+                Text(title)
+                    .font(.body.weight(.medium))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
+                    .layoutPriority(1)
             }
-            .posterStyle(.landscape)
+            .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.card)
+        .buttonStyle(LiveTVNavigationButtonStyle())
+        .isSelected(isSelected)
     }
 
     @ViewBuilder
     private var contentView: some View {
+        VStack(spacing: 0) {
+            liveTVNavigation
+
+            switch selectedSection {
+            case .channels:
+                channelsContentView
+            case .guide:
+                guideContentView
+            case .onNow:
+                onNowContentView
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var channelsContentView: some View {
+        PagingLibraryView(library: ChannelLibrary())
+            .toolbar(.hidden, for: .navigationBar)
+            .padding(.top, 8)
+    }
+
+    @ViewBuilder
+    private var guideContentView: some View {
+        if programsViewModel.channelPrograms.isNotEmpty {
+            TVGuideGrid(channelPrograms: programsViewModel.channelPrograms)
+                .clipped()
+        } else {
+            ContentUnavailableView(L10n.noPrograms.localizedCapitalized, systemImage: "tv")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    @ViewBuilder
+    private var onNowContentView: some View {
         ScrollView(showsIndicators: false) {
             VStack(spacing: 20) {
-
-                liveTVSectionScrollView
-
                 if programsViewModel.hasNoResults {
                     ContentUnavailableView(L10n.noPrograms.localizedCapitalized, systemImage: "tv")
                 }
@@ -104,6 +164,7 @@ struct ProgramsView: View {
                     programsSection(title: L10n.news, keyPath: \.news)
                 }
             }
+            .padding(.top, 8)
         }
     }
 
@@ -151,5 +212,68 @@ struct ProgramsView: View {
                 programsViewModel.send(.refresh)
             }
         }
+    }
+}
+
+private struct LiveTVNavigationButtonStyle: ButtonStyle {
+
+    @Environment(\.isFocused)
+    private var isFocused
+    @Environment(\.isSelected)
+    private var isSelected
+
+    @ViewBuilder
+    func makeBody(configuration: Configuration) -> some View {
+        if #available(tvOS 26.0, *) {
+            glassBody(configuration)
+        } else {
+            legacyBody(configuration)
+        }
+    }
+
+    private func baseLabel(_ configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(.white)
+            .padding(.horizontal, 26)
+            .padding(.vertical, 12)
+            .frame(width: 268, height: 58)
+            .contentShape(Capsule())
+    }
+
+    @available(tvOS 26.0, *)
+    private func glassBody(_ configuration: Configuration) -> some View {
+        baseLabel(configuration)
+            .glassEffect(
+                .regular
+                    .tint(isSelected ? Color.accentColor.opacity(0.35) : nil)
+                    .interactive(isFocused),
+                in: Capsule()
+            )
+            .overlay {
+                Capsule()
+                    .stroke(.white.opacity(isFocused || isSelected ? 0.24 : 0.08), lineWidth: 1)
+            }
+            .brightness(isFocused ? 0.08 : 0)
+            .animation(.easeInOut(duration: 0.12), value: isFocused)
+            .animation(.easeInOut(duration: 0.12), value: isSelected)
+    }
+
+    private func legacyBody(_ configuration: Configuration) -> some View {
+        baseLabel(configuration)
+            .background {
+                Capsule()
+                    .fill(
+                        isSelected
+                            ? Color.accentColor.opacity(isFocused ? 0.9 : 0.65)
+                            : Color.white.opacity(isFocused ? 0.22 : 0.12)
+                    )
+            }
+            .overlay {
+                Capsule()
+                    .stroke(.white.opacity(isFocused || isSelected ? 0.24 : 0.08), lineWidth: 1)
+            }
+            .clipShape(Capsule())
+            .animation(.easeInOut(duration: 0.12), value: isFocused)
+            .animation(.easeInOut(duration: 0.12), value: isSelected)
     }
 }

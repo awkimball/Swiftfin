@@ -49,6 +49,8 @@ final class ProgramsViewModel: ViewModel, Stateful {
     private(set) var series: [BaseItemDto] = []
     @Published
     private(set) var sports: [BaseItemDto] = []
+    @Published
+    private(set) var channelPrograms: [ChannelProgram] = []
 
     @Published
     var state: State = .initial
@@ -63,7 +65,7 @@ final class ProgramsViewModel: ViewModel, Stateful {
             recommended,
             series,
             sports,
-        ].allSatisfy(\.isEmpty)
+        ].allSatisfy(\.isEmpty) && channelPrograms.isEmpty
     }
 
     func respond(to action: Action) -> State {
@@ -77,17 +79,22 @@ final class ProgramsViewModel: ViewModel, Stateful {
                 guard let self else { return }
 
                 do {
-                    let sections = try await getItemSections()
+                    async let sections = getItemSections()
+                    async let channelPrograms = getChannelPrograms()
+
+                    let refreshedSections = try await sections
+                    let refreshedChannelPrograms = try await channelPrograms
 
                     guard !Task.isCancelled else { return }
 
                     await MainActor.run {
-                        self.kids = sections[.kids] ?? []
-                        self.movies = sections[.movies] ?? []
-                        self.news = sections[.news] ?? []
-                        self.recommended = sections[.recommended] ?? []
-                        self.series = sections[.series] ?? []
-                        self.sports = sections[.sports] ?? []
+                        self.kids = refreshedSections[.kids] ?? []
+                        self.movies = refreshedSections[.movies] ?? []
+                        self.news = refreshedSections[.news] ?? []
+                        self.recommended = refreshedSections[.recommended] ?? []
+                        self.series = refreshedSections[.series] ?? []
+                        self.sports = refreshedSections[.sports] ?? []
+                        self.channelPrograms = refreshedChannelPrograms
 
                         self.state = .content
                     }
@@ -167,5 +174,47 @@ final class ProgramsViewModel: ViewModel, Stateful {
         let response = try await send(request)
 
         return response.value.items ?? []
+    }
+
+    private func getChannelPrograms() async throws -> [ChannelProgram] {
+        guard let minEndDate = Calendar.current.date(byAdding: .hour, value: -1, to: .now),
+              let maxStartDate = Calendar.current.date(byAdding: .hour, value: 6, to: .now)
+        else { return [] }
+
+        var channelParameters = Paths.GetLiveTvChannelsParameters()
+        channelParameters.fields = .MinimumFields
+        channelParameters.enableImages = true
+        channelParameters.limit = 1000
+        channelParameters.sortBy = [.name]
+        channelParameters.userID = try authenticatedUser.id
+
+        let channelRequest = Paths.getLiveTvChannels(parameters: channelParameters)
+        let channelResponse = try await send(channelRequest)
+        let channels = (channelResponse.value.items ?? [])
+            .sorted(by: BaseItemDto.liveTVChannelSort)
+        guard channels.isNotEmpty else { return [] }
+
+        var programParameters = Paths.GetLiveTvProgramsParameters()
+        programParameters.channelIDs = channels.compactMap(\.id)
+        programParameters.maxStartDate = maxStartDate
+        programParameters.minEndDate = minEndDate
+        programParameters.sortBy = [.startDate]
+        programParameters.userID = try authenticatedUser.id
+
+        let programRequest = Paths.getLiveTvPrograms(parameters: programParameters)
+        let programResponse = try await send(programRequest)
+
+        let groupedPrograms = (programResponse.value.items ?? [])
+            .grouped { program in
+                channels.first(where: { $0.id == program.channelID })
+            }
+
+        return channels
+            .reduce(into: [:]) { partialResult, channel in
+                partialResult[channel] = (groupedPrograms[channel] ?? [])
+                    .sorted(using: \.startDate)
+            }
+            .map(ChannelProgram.init)
+            .sorted(by: ChannelProgram.liveTVChannelSort)
     }
 }

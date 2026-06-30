@@ -99,6 +99,7 @@ extension NativeVideoPlayer {
         private var selectedSubtitleRenditionOffset: Int?
         private var playbackInfoController: UIViewController?
         private var playbackInfoModel: PlaybackInfoModel?
+        private var currentLiveProgram: BaseItemDto?
         #if !os(tvOS)
         private var menuButton: UIButton?
         private var overflowButton: UIButton?
@@ -468,7 +469,7 @@ extension NativeVideoPlayer {
                 playbackInfoController.removeFromParent()
                 self.playbackInfoController = nil
             } else if let contentOverlayView {
-                let model = PlaybackInfoModel(player: player, item: manager.playbackItem)
+                let model = PlaybackInfoModel(player: player, item: manager.playbackItem, currentProgram: currentLiveProgram)
                 let host = UIHostingController(rootView: PlaybackInfoOverlay(model: model))
                 host.view.backgroundColor = .clear
 
@@ -496,19 +497,108 @@ extension NativeVideoPlayer {
         #if os(tvOS)
         @MainActor
         private func updateExternalMetadata() {
-            guard let posterURL = manager.item.imageSource(.primary, maxWidth: 600).url else { return }
-
             Task { @MainActor [weak self] in
                 guard let self,
-                      let (data, _) = try? await URLSession.shared.data(from: posterURL),
                       let currentItem = self.player?.currentItem
                 else { return }
 
-                var updated = currentItem.externalMetadata
-                    .filter { $0.identifier != .commonIdentifierArtwork }
-                updated.append(self.artworkMetadataItem(data: data))
+                async let artworkData = self.fetchArtworkData()
+                async let currentProgram = self.fetchCurrentLiveProgram()
+
+                let data = await artworkData
+                let program = await currentProgram
+                self.currentLiveProgram = program
+                self.playbackInfoModel?.currentProgram = program
+
+                let replacedIdentifiers: Set<AVMetadataIdentifier> = [
+                    .commonIdentifierArtwork,
+                    .commonIdentifierDescription,
+                    .commonIdentifierTitle,
+                    .iTunesMetadataTrackSubTitle,
+                ]
+
+                var updated = currentItem.externalMetadata.filter { metadataItem in
+                    guard let identifier = metadataItem.identifier else { return true }
+                    return !replacedIdentifiers.contains(identifier)
+                }
+
+                if self.manager.item.isLiveStream {
+                    updated.append(contentsOf: self.liveTVMetadataItems(program: program))
+                }
+
+                if let data {
+                    updated.append(self.artworkMetadataItem(data: data))
+                }
+
                 currentItem.externalMetadata = updated
             }
+        }
+
+        private func fetchArtworkData() async -> Data? {
+            guard let posterURL = manager.item.imageSource(.primary, maxWidth: 600).url,
+                  let (data, _) = try? await URLSession.shared.data(from: posterURL)
+            else { return nil }
+
+            return data
+        }
+
+        private func fetchCurrentLiveProgram() async -> BaseItemDto? {
+            guard manager.item.isLiveStream,
+                  let channelID = manager.item.id,
+                  let userSession = Container.shared.currentUserSession()
+            else { return nil }
+
+            var parameters = Paths.GetLiveTvProgramsParameters()
+            parameters.channelIDs = [channelID]
+            parameters.fields = .MinimumFields
+                .appending(.channelInfo)
+            parameters.isAiring = true
+            parameters.limit = 1
+            parameters.userID = userSession.user.id
+
+            let request = Paths.getLiveTvPrograms(parameters: parameters)
+            guard let response = try? await userSession.client.send(request) else { return nil }
+
+            return response.value.items?.first
+        }
+
+        private func liveTVMetadataItems(program: BaseItemDto?) -> [AVMetadataItem] {
+            let channelTitle = [manager.item.channelNumber, manager.item.displayTitle]
+                .compacted()
+                .filter(\.isNotEmpty)
+                .joined(separator: " ")
+
+            let title = program.map { "\(channelTitle) - \($0.displayTitle)" } ?? channelTitle
+            let subtitle = program.flatMap(Self.programEpisodeTitle)
+            let description = program?.overview
+
+            return [
+                AVMetadataIdentifier.commonIdentifierTitle: title,
+                .iTunesMetadataTrackSubTitle: subtitle,
+                .commonIdentifierDescription: description,
+            ]
+                .compactMap { identifier, value in
+                    guard let value, value.isNotEmpty else { return nil }
+
+                    let item = AVMutableMetadataItem()
+                    item.identifier = identifier
+                    item.value = value as NSString
+                    item.extendedLanguageTag = "und"
+
+                    return item.copy() as? AVMetadataItem
+                }
+        }
+
+        private static func programEpisodeTitle(_ program: BaseItemDto) -> String? {
+            if let episodeTitle = program.episodeTitle, episodeTitle.isNotEmpty {
+                return episodeTitle
+            }
+
+            if let seriesName = program.seriesName, seriesName != program.displayTitle {
+                return seriesName
+            }
+
+            return program.seasonEpisodeLabel
         }
 
         private func artworkMetadataItem(data: Data) -> AVMetadataItem {
@@ -535,19 +625,28 @@ private final class PlaybackInfoModel: ObservableObject {
     @Published
     private(set) var streamRows: [Row] = []
     @Published
+    private(set) var liveTVRows: [Row] = []
+    @Published
     private(set) var sourceRows: [Row] = []
     @Published
     private(set) var transcodeRows: [Row] = []
 
     private weak var player: AVPlayer?
     private let item: MediaPlayerItem?
+    var currentProgram: BaseItemDto? {
+        didSet {
+            refresh()
+        }
+    }
+
     private let sessionProvider: PlaybackInformationProvider?
     private var timer: Timer?
     private var sessionCancellable: AnyCancellable?
 
-    init(player: AVPlayer?, item: MediaPlayerItem?) {
+    init(player: AVPlayer?, item: MediaPlayerItem?, currentProgram: BaseItemDto? = nil) {
         self.player = player
         self.item = item
+        self.currentProgram = currentProgram
 
         if let itemID = item?.baseItem.id {
             let provider = PlaybackInformationProvider(itemID: itemID)
@@ -575,8 +674,46 @@ private final class PlaybackInfoModel: ObservableObject {
     private func refresh() {
         guard let item else { return }
         streamRows = buildStreamRows(item)
+        liveTVRows = buildLiveTVRows(item)
         sourceRows = buildSourceRows(item)
         transcodeRows = buildTranscodeRows()
+    }
+
+    private func buildLiveTVRows(_ item: MediaPlayerItem) -> [Row] {
+        guard item.baseItem.isLiveStream else { return [] }
+
+        let channelTitle = [item.baseItem.channelNumber, item.baseItem.displayTitle]
+            .compacted()
+            .filter(\.isNotEmpty)
+            .joined(separator: " ")
+
+        var rows = [Row(label: "Channel", value: channelTitle)]
+
+        if let currentProgram {
+            rows.append(Row(label: "Title", value: currentProgram.displayTitle))
+
+            if let episodeTitle = programEpisodeTitle(currentProgram) {
+                rows.append(Row(label: "Episode", value: episodeTitle))
+            }
+
+            if let overview = currentProgram.overview, overview.isNotEmpty {
+                rows.append(Row(label: "Description", value: overview))
+            }
+        }
+
+        return rows
+    }
+
+    private func programEpisodeTitle(_ program: BaseItemDto) -> String? {
+        if let episodeTitle = program.episodeTitle, episodeTitle.isNotEmpty {
+            return episodeTitle
+        }
+
+        if let seriesName = program.seriesName, seriesName != program.displayTitle {
+            return seriesName
+        }
+
+        return program.seasonEpisodeLabel
     }
 
     private func buildStreamRows(_ item: MediaPlayerItem) -> [Row] {
@@ -723,6 +860,7 @@ private struct PlaybackInfoOverlay: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
+            section("Live TV", model.liveTVRows)
             section("Stream", model.streamRows)
             section("Source", model.sourceRows)
             section("Transcode", model.transcodeRows)
