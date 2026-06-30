@@ -77,15 +77,17 @@ class MediaProgressObserver: ViewModel, MediaPlayerObserver {
         timer.poke()
 
         if let item, newItem !== item {
-            // Don't send a stop report when the new item reuses the same live stream
-            // (e.g. the live transcode fallback rebuilds the item but keeps the same
-            // liveStreamID). Reporting stopped closes the shared live stream on the
-            // server, tearing it out from under the new item's transcode.
+            // Don't send a stop report when the new item reuses the same live stream.
+            // Exception: live copy -> forced transcode fallback opens a second consumer
+            // for the shared stream, so the failed copy consumer must be released.
             let oldLiveStreamID = item.mediaSource.liveStreamID
             let newLiveStreamID = newItem?.mediaSource.liveStreamID
             let liveStreamReused = oldLiveStreamID != nil && oldLiveStreamID == newLiveStreamID
+            let liveFallbackRebuild = item.baseItem.isLiveStream == true
+                && !item.forcedVideoReencode
+                && newItem?.forcedVideoReencode == true
 
-            if !liveStreamReused {
+            if !liveStreamReused || liveFallbackRebuild {
                 sendStopReport(for: item, seconds: manager?.seconds)
             }
 
