@@ -106,7 +106,7 @@ extension VideoPlayer {
 
         #if os(tvOS)
         private func focusPlaybackControls() {
-            focusCoordinator.focus(mediaSession?.item.isLiveStream == true ? Focus.controls : Focus.progress)
+            focusCoordinator.focus(Focus.progress)
         }
 
         func updateOverlayActionFocus(previousIDs: [String] = []) {

@@ -52,11 +52,11 @@ extension VideoPlayer.PlaybackControls.Toolbar {
                 filteredButtons.removeAll { $0 == .aspectFill || $0 == .pictureInPicture }
             }
 
-            if mediaSession.playbackItem?.audioStreams.isEmpty == true {
+            if mediaSession.playbackItem?.audioStreams.isEmpty != false {
                 filteredButtons.removeAll { $0 == .audio || $0 == .audioOffset }
             }
 
-            if mediaSession.playbackItem?.subtitleStreams.isEmpty == true {
+            if mediaSession.playbackItem?.subtitleStreams.isEmpty != false {
                 filteredButtons.removeAll { $0 == .subtitles || $0 == .subtitleOffset }
             }
 

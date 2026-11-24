@@ -91,16 +91,35 @@ extension VideoPlayer.PlaybackControls {
 
         @ContentBuilder
         private var liveIndicator: some View {
-            Text(L10n.live)
-                .font(.caption)
-                .fontWeight(.semibold)
-                .foregroundStyle(.white)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 4)
+            let isFocused = viewState.isProgressBarFocused
+            let isPaused = mediaSession.playbackRequestStatus == .paused
+
+            Button {
+                mediaSession.togglePlayPause()
+                viewState.refreshAutoDismiss()
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: isPaused ? "play.fill" : "pause.fill")
+                        .font(.caption.weight(.bold))
+
+                    Circle()
+                        .fill(Color(uiColor: .systemRed))
+                        .frame(width: 8, height: 8)
+
+                    Text(L10n.live)
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                }
+                .foregroundStyle(isFocused ? .black : .white)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 8)
                 .background {
                     Capsule()
-                        .fill(Color.gray)
+                        .fill(isFocused ? Color.white : Color.white.opacity(0.18))
                 }
+            }
+            .buttonStyle(EPGButtonStyle())
+            .coordinatedFocus(ViewState.Focus.progress)
         }
 
         @ContentBuilder
@@ -166,12 +185,12 @@ extension VideoPlayer.PlaybackControls {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
                     videoPlayerSlider
+                        .coordinatedFocus(ViewState.Focus.progress)
 
                     SplitTimeStamp()
                         .foregroundStyle(.white, Color.lightGray)
                 }
             }
-            .coordinatedFocus(ViewState.Focus.progress)
             .foregroundStyle(Color.white.opacity(0.75))
             .overlay(alignment: .topLeading) {
                 previewImage
