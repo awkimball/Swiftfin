@@ -46,6 +46,9 @@ struct EPGLoadableView<Content: View>: View {
 
 struct EPGContentView: View {
 
+    @Namespace
+    private var focusScope
+
     @State
     private var selectedGroup: ProgramBlock?
 
@@ -53,15 +56,18 @@ struct EPGContentView: View {
     private var proxy = EPGScrollProxy()
 
     private let action: (BaseItemDto) -> Void
+    private let onFocus: ((BaseItemDto?, ProgramBlock?) -> Void)?
     private let selectedChannelID: String?
     private let viewModel: EPGViewModel
 
     init(
         selectedChannelID: String? = nil,
         viewModel: EPGViewModel,
+        onFocus: ((BaseItemDto?, ProgramBlock?) -> Void)? = nil,
         action: @escaping (BaseItemDto) -> Void
     ) {
         self.action = action
+        self.onFocus = onFocus
         self.selectedChannelID = selectedChannelID
         self.viewModel = viewModel
     }
@@ -94,7 +100,12 @@ struct EPGContentView: View {
                     bottomInset: frame.safeAreaInsets.bottom,
                     proxy: proxy,
                     selectedChannelID: selectedChannelID,
-                    viewModel: viewModel
+                    viewModel: viewModel,
+                    onFocusChannel: { channel in
+                        let blocks = channel.id.flatMap { viewModel.programs[$0] } ?? []
+                        let current = blocks.first { $0.isAiring(at: viewModel.now) } ?? blocks.first
+                        onFocus?(channel, current)
+                    }
                 ) { item in
                     action(item)
                 }
@@ -109,10 +120,18 @@ struct EPGContentView: View {
                         proxy.registerHorizontal(scrollView)
                     }
 
-                    Divider()
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.10))
+                        .frame(height: 1)
 
                     EPGCollectionView(
                         bottomInset: frame.safeAreaInsets.bottom,
+                        onFocus: { block in
+                            let channel = block.id.channelID.flatMap { id in
+                                viewModel.channels.first { $0.itemID == id }?.snapshot
+                            }
+                            onFocus?(channel, block)
+                        },
                         onReachedBottom: {
                             viewModel.getNextPage()
                         },
@@ -125,8 +144,14 @@ struct EPGContentView: View {
                         proxy: proxy,
                         viewModel: viewModel
                     )
+                    #if os(tvOS)
+                    .prefersDefaultFocus(in: focusScope)
+                    #endif
                 }
             }
+            #if os(tvOS)
+            .focusScope(focusScope)
+            #endif
             .ignoresSafeArea(edges: .bottom)
         }
         .trackingFrame(for: .layoutContainer)

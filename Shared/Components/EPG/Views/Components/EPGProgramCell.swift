@@ -16,7 +16,10 @@ struct EPGProgramCell: View {
     private var stickyOffset: CGFloat
 
     let scrollState: EPGScrollState
+    let cellWidth: CGFloat
+    let isLarge: Bool
     let isCurrent: Bool
+    let isPast: Bool
     let isFocused: Bool
     let accentColor: Color
     let action: () -> Void
@@ -31,13 +34,19 @@ struct EPGProgramCell: View {
         scrollState: EPGScrollState,
         block: ProgramBlock,
         leadingOffset: CGFloat,
+        cellWidth: CGFloat,
+        isLarge: Bool,
         isCurrent: Bool,
+        isPast: Bool = false,
         isFocused: Bool,
         accentColor: Color,
         action: @escaping () -> Void
     ) {
         self.scrollState = scrollState
+        self.cellWidth = cellWidth
+        self.isLarge = isLarge
         self.isCurrent = isCurrent
+        self.isPast = isPast
         self.isFocused = isFocused
         self.accentColor = accentColor
         self.action = action
@@ -50,20 +59,44 @@ struct EPGProgramCell: View {
 
     private var backgroundColor: Color {
         if isFocused {
-            .white
+            isCurrent ? accentColor.opacity(0.38) : Color.primary.opacity(0.20)
         } else if isCurrent {
-            accentColor.opacity(0.5)
+            accentColor.opacity(0.18)
+        } else if isPast {
+            Color.secondarySystemFill.opacity(0.28)
         } else {
-            Color.secondarySystemFill.opacity(0.5)
+            Color.secondarySystemFill.opacity(0.55)
         }
     }
 
+    private var borderColor: Color {
+        if isFocused {
+            Color.primary.opacity(0.92)
+        } else if isCurrent {
+            accentColor.opacity(0.42)
+        } else if isPast {
+            Color.primary.opacity(0.05)
+        } else {
+            Color.primary.opacity(0.10)
+        }
+    }
+
+    private var borderWidth: CGFloat {
+        isFocused ? 2.5 : 1
+    }
+
     private var primaryColor: Color {
-        isFocused ? .black : .primary
+        isFocused ? .primary : (isPast ? .primary.opacity(0.45) : .primary)
     }
 
     private var secondaryColor: Color {
-        isFocused ? .black.opacity(0.6) : .secondary
+        if isFocused {
+            .primary.opacity(0.82)
+        } else if isPast {
+            .secondary.opacity(0.55)
+        } else {
+            .secondary
+        }
     }
 
     private var stickyOffsetPublisher: AnyPublisher<CGFloat, Never> {
@@ -75,26 +108,53 @@ struct EPGProgramCell: View {
 
     @ContentBuilder
     var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+        let showsSubtitle = isLarge
+            ? (cellWidth >= 170 && presentation.subtitle != nil)
+            : cellWidth >= 90
+
         Button(action: action) {
             StickyProgramContentLayout(
-                stickyOffset: stickyOffset
+                stickyOffset: stickyOffset,
+                horizontalPadding: isLarge ? 20 : 10
             ) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(presentation.title)
-                        .font(.footnote.weight(isCurrent ? .semibold : .regular))
-                        .foregroundStyle(primaryColor)
+                VStack(alignment: .leading, spacing: isLarge ? 6 : 2) {
+                    HStack(spacing: isLarge ? 8 : 6) {
+                        if presentation.isLive, cellWidth >= 150 {
+                            Text(L10n.live.uppercased())
+                                .font(isLarge ? .system(size: 15, weight: .bold) : .caption2.weight(.bold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, isLarge ? 8 : 6)
+                                .padding(.vertical, isLarge ? 3 : 2)
+                                .background(Color(uiColor: .systemRed), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                        }
 
-                    Text(presentation.time)
-                        .font(.caption2)
-                        .foregroundStyle(secondaryColor)
+                        Text(presentation.title)
+                            .font(isLarge ? .system(size: 28, weight: .semibold) : .footnote.weight(isCurrent ? .semibold : .medium))
+                            .foregroundStyle(primaryColor)
+
+                        if presentation.hasTimer, cellWidth >= 130 {
+                            Circle()
+                                .fill(Color(uiColor: .systemRed))
+                                .frame(width: isLarge ? 10 : 6, height: isLarge ? 10 : 6)
+                        }
+                    }
+
+                    if showsSubtitle {
+                        Text(isLarge ? (presentation.subtitle ?? "") : presentation.time)
+                            .font(isLarge ? .system(size: 22, weight: .medium) : .caption2)
+                            .foregroundStyle(secondaryColor)
+                    }
                 }
                 .lineLimit(1)
             }
-            .background(backgroundColor)
+            .background(backgroundColor, in: shape)
             .overlay {
-                Rectangle()
-                    .strokeBorder(Color.secondarySystemFill.opacity(0.5), lineWidth: isFocused ? 0 : 1)
+                shape
+                    .strokeBorder(borderColor, lineWidth: borderWidth)
             }
+            .padding(.trailing, isLarge ? 8 : 4)
+            .padding(.vertical, isLarge ? 5 : 3)
             .contentShape(Rectangle())
         }
         .buttonStyle(EPGButtonStyle())
@@ -109,24 +169,27 @@ private struct ProgramCellPresentation {
 
     let title: String
     let time: String
+    let subtitle: String?
+    let isLive: Bool
+    let hasTimer: Bool
 
     @MainActor
     init(block: ProgramBlock) {
+        self.title = block.title
+        self.time = block.timeRangeLabel ?? ""
+        self.isLive = !block.isGroup && block.programs.first?.isLive == true
+        self.hasTimer = block.hasTimer
+
         if block.isGroup {
-            // swiftlint:disable:next hard_coded_display_string
-            self.title = "\(block.programs.count) \(L10n.programs)"
-            self.time = block.start.formatted(date: .omitted, time: .shortened)
-        } else if let program = block.programs.first {
-            self.title = program.displayTitle
-            self.time = [
-                program.startDate?.formatted(date: .omitted, time: .shortened),
-                program.endDate?.formatted(date: .omitted, time: .shortened),
-            ]
-                .compactMap(\.self)
-                .joined(separator: " \(String.bullet) ")
+            self.subtitle = block.start.formatted(date: .omitted, time: .shortened)
+        } else if let episodeHeadline = block.episodeHeadline {
+            self.subtitle = episodeHeadline
         } else {
-            self.title = L10n.programs
-            self.time = ""
+            let parts = [
+                block.categoryLabel,
+                block.programs.first?.officialRating?.nilIfBlank,
+            ].compactMap(\.self)
+            self.subtitle = parts.isEmpty ? nil : parts.joined(separator: " \(String.bullet) ")
         }
     }
 }
@@ -134,6 +197,7 @@ private struct ProgramCellPresentation {
 private struct StickyProgramContentLayout: Layout {
 
     let stickyOffset: CGFloat
+    var horizontalPadding: CGFloat = 12
 
     func sizeThatFits(
         proposal: ProposedViewSize,
@@ -152,18 +216,18 @@ private struct StickyProgramContentLayout: Layout {
         guard let content = subviews.first else { return }
 
         let contentSize = content.sizeThatFits(.unspecified)
-        let horizontalPadding: CGFloat = 8
         let maximumShift = max(0, bounds.width - contentSize.width - horizontalPadding * 2)
         let shift = clamp(
             stickyOffset,
             min: 0,
             max: maximumShift
         )
+        let verticalOffset = max(0, (bounds.height - contentSize.height) / 2)
 
         content.place(
             at: CGPoint(
                 x: bounds.minX + horizontalPadding + shift,
-                y: bounds.minY + 6
+                y: bounds.minY + verticalOffset
             ),
             anchor: .topLeading,
             proposal: ProposedViewSize(

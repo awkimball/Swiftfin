@@ -54,6 +54,71 @@ struct ProgramBlock: Identifiable {
             return start <= date && date < end
         }
     }
+
+    var hasTimer: Bool {
+        programs.contains { $0.timerID != nil || $0.seriesTimerID != nil }
+    }
+
+    var title: String {
+        if isGroup {
+            // swiftlint:disable:next hard_coded_display_string
+            return "\(programs.count) \(L10n.programs)"
+        }
+
+        return programs.first?.displayTitle ?? L10n.programs
+    }
+
+    var timeRangeLabel: String? {
+        if isGroup {
+            return [
+                start.formatted(date: .omitted, time: .shortened),
+                end.formatted(date: .omitted, time: .shortened),
+            ]
+                .joined(separator: " – ")
+        }
+
+        guard let program = programs.first else { return nil }
+
+        let times = [
+            program.startDate?.formatted(date: .omitted, time: .shortened),
+            program.endDate?.formatted(date: .omitted, time: .shortened),
+        ]
+            .compactMap(\.self)
+
+        return times.isEmpty ? nil : times.joined(separator: " – ")
+    }
+
+    var episodeHeadline: String? {
+        guard !isGroup, let program = programs.first else { return nil }
+
+        let distinctEpisode = program.episodeTitle?.nilIfBlank.flatMap {
+            $0.caseInsensitiveCompare(program.displayTitle) == .orderedSame ? nil : $0
+        }
+
+        let parts = [program.seasonEpisodeLabel, distinctEpisode].compactMap(\.self)
+        return parts.isEmpty ? nil : parts.joined(separator: " \(String.bullet) ")
+    }
+
+    var categoryLabel: String? {
+        guard !isGroup, let program = programs.first else { return nil }
+
+        var parts: [String] = []
+
+        if program.isMovie == true {
+            parts.append(L10n.movie)
+            if let year = program.productionYear {
+                parts.append(String(year))
+            }
+        } else if let genres = program.genres?.prefix(2), genres.isNotEmpty {
+            parts.append(contentsOf: genres)
+        } else if program.isSports == true {
+            parts.append(L10n.sports)
+        } else if program.isNews == true {
+            parts.append(L10n.news)
+        }
+
+        return parts.isEmpty ? nil : parts.joined(separator: " \(String.bullet) ")
+    }
 }
 
 @MainActor

@@ -14,6 +14,9 @@ struct EPGChannelButton: View {
     @AdaptiveLayout
     private var viewLayout
 
+    @AppTheme
+    private var theme
+
     @Environment(\.isSelected)
     private var isSelected
 
@@ -22,76 +25,142 @@ struct EPGChannelButton: View {
 
     @SharedBaseItem
     var channel: BaseItemDto
+    var onFocus: (() -> Void)?
     let action: () -> Void
-
-    private var borderWidth: CGFloat {
-        if isFocused {
-            5
-        } else if isSelected {
-            2
-        } else {
-            0
-        }
-    }
 
     private var hasPrimaryImage: Bool {
         channel.imageTags?[ImageType.primary.rawValue] != nil
     }
 
-    @ContentBuilder
-    private var channelContent: some View {
-        if hasPrimaryImage {
-            PosterImage(
-                item: channel,
-                type: .square,
-                contentMode: .fill
-            )
+    private var cardFill: Color {
+        if isFocused {
+            Color.primary.opacity(0.20)
+        } else if isSelected {
+            theme.accentColor.opacity(0.22)
         } else {
-            ZStack {
-                Color.secondarySystemFill
+            Color.secondarySystemFill.opacity(0.55)
+        }
+    }
 
-                VStack(spacing: 2) {
-                    if let channelNumber = channel.channelNumber, channelNumber.isNotEmpty {
-                        Text(channelNumber)
-                            .font(.headline)
-                            .fontWeight(.semibold)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.7)
-                    }
+    private var borderColor: Color {
+        if isFocused {
+            Color.primary.opacity(0.90)
+        } else if isSelected {
+            theme.accentColor.opacity(0.75)
+        } else {
+            Color.primary.opacity(0.10)
+        }
+    }
 
-                    Text(channel.displayTitle)
-                        .font(.caption2)
-                        .fontWeight(.medium)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.center)
-                        .minimumScaleFactor(0.7)
+    private var borderWidth: CGFloat {
+        isFocused ? 2.5 : (isSelected ? 1.5 : 1)
+    }
+
+    @ContentBuilder
+    private var logoView: some View {
+        ImageView(channel.imageSource(
+            .primary,
+            itemID: channel.id,
+            environment: ImageSourceOptions(maxWidth: viewLayout.isLarge ? 140 : 100)
+        ))
+        .image { image in
+            image
+                .aspectRatio(contentMode: .fit)
+        }
+        .failure {
+            Color.clear
+        }
+        .placeholder { _ in
+            Color.clear
+        }
+    }
+
+    @ContentBuilder
+    private var largeCardContent: some View {
+        HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 3) {
+                if let channelNumber = channel.channelNumber, channelNumber.isNotEmpty {
+                    Text(channelNumber)
+                        .font(.system(size: 20, weight: .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(.white.opacity(isFocused ? 0.85 : 0.52))
+                        .lineLimit(1)
                 }
-                .foregroundStyle(.primary)
-                .padding(6)
+
+                Text(channel.displayTitle)
+                    .font(.system(size: 26, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.80)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if hasPrimaryImage {
+                logoView
+                    .frame(width: 72, height: 44)
             }
         }
+        .padding(.horizontal, 18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+    }
+
+    @ContentBuilder
+    private var standardCardContent: some View {
+        VStack(spacing: 4) {
+            if hasPrimaryImage {
+                logoView
+                    .frame(height: 26)
+            }
+
+            HStack(spacing: 4) {
+                if let channelNumber = channel.channelNumber, channelNumber.isNotEmpty {
+                    Text(channelNumber)
+                        .font(.caption2.weight(.semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+
+                Text(channel.displayTitle)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.primary)
+            }
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
+        }
+        .padding(.horizontal, 6)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     @ContentBuilder
     var body: some View {
         let layout = EPGLayout(viewLayout: viewLayout)
-        let posterSize = min(
-            viewLayout.isLarge && !isFocused ? layout.rowHeight - 8 : layout.rowHeight,
-            layout.channelColumnWidth
-        )
+        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
 
         Button(action: action) {
-            channelContent
-                .frame(width: posterSize, height: posterSize)
-                .clipped()
-                .overlay {
-                    Rectangle()
-                        .strokeBorder(.tint, lineWidth: borderWidth)
+            Group {
+                if viewLayout.isLarge {
+                    largeCardContent
+                } else {
+                    standardCardContent
                 }
-                .frame(width: layout.channelColumnWidth, height: layout.rowHeight)
-                .animation(.easeOut(duration: 0.1), value: isFocused)
+            }
+            .background(cardFill, in: shape)
+            .overlay {
+                shape
+                    .strokeBorder(borderColor, lineWidth: borderWidth)
+            }
+            .padding(.trailing, viewLayout.isLarge ? 10 : 6)
+            .padding(.leading, viewLayout.isLarge ? 4 : 4)
+            .padding(.vertical, viewLayout.isLarge ? 4 : 3)
+            .frame(width: layout.channelColumnWidth, height: layout.rowHeight)
+            .contentShape(Rectangle())
         }
         .buttonStyle(EPGButtonStyle())
         .focused($isFocused)
+        .onChange(of: isFocused) { _, focused in
+            if focused {
+                onFocus?()
+            }
+        }
     }
 }

@@ -22,22 +22,30 @@ struct EPGLayout: Equatable {
         rulerHeight: CGFloat? = nil,
         pointsPerMinute: CGFloat? = nil
     ) {
-        let minimumRowHeight: CGFloat = viewLayout.value(standard: 74, large: 120)
-        let minimumRulerHeight: CGFloat = viewLayout.value(standard: 28, large: 44)
+        let minimumRowHeight: CGFloat = viewLayout.value(standard: 76, large: 120)
+        let minimumRulerHeight: CGFloat = viewLayout.value(standard: 34, large: 62)
         let traits = UITraitCollection(preferredContentSizeCategory: viewLayout.contentSizeCategory)
-        let preferredProgramHeight =
-            UIFont.preferredFont(forTextStyle: .footnote, compatibleWith: traits).lineHeight +
-            UIFont.preferredFont(forTextStyle: .caption2, compatibleWith: traits).lineHeight +
-            18
-        let preferredRulerHeight = UIFont.preferredFont(forTextStyle: .caption2, compatibleWith: traits).lineHeight + 12
+        let preferredProgramHeight = viewLayout.isLarge
+            ? minimumRowHeight
+            : (
+                UIFont.preferredFont(forTextStyle: .footnote, compatibleWith: traits).lineHeight +
+                    UIFont.preferredFont(forTextStyle: .caption2, compatibleWith: traits).lineHeight +
+                    22
+            ).rounded(.up)
+        let preferredRulerHeight = viewLayout.isLarge
+            ? minimumRulerHeight
+            : (UIFont.preferredFont(forTextStyle: .caption2, compatibleWith: traits).lineHeight + 14).rounded(.up)
 
         self.channelColumnWidth = channelColumnWidth ?? viewLayout.value(
-            standard: viewLayout.value(compact: 84, regular: 110),
-            large: 130
+            standard: viewLayout.value(compact: 100, regular: 148),
+            large: 324
         )
-        self.rowHeight = rowHeight ?? max(minimumRowHeight, preferredProgramHeight.rounded(.up))
-        self.rulerHeight = rulerHeight ?? max(minimumRulerHeight, preferredRulerHeight.rounded(.up))
-        self.pointsPerMinute = pointsPerMinute ?? viewLayout.value(standard: viewLayout.value(compact: 5, regular: 7), large: 10)
+        self.rowHeight = rowHeight ?? max(minimumRowHeight, preferredProgramHeight)
+        self.rulerHeight = rulerHeight ?? max(minimumRulerHeight, preferredRulerHeight)
+        self.pointsPerMinute = pointsPerMinute ?? viewLayout.value(
+            standard: viewLayout.value(compact: 5, regular: 7),
+            large: 13.5
+        )
     }
 
     /// The horizontal distance that a span of time occupies.

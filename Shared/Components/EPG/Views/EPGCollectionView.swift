@@ -18,6 +18,7 @@ struct EPGCollectionView: UIViewRepresentable {
     private var theme
 
     let bottomInset: CGFloat
+    var onFocus: ((ProgramBlock) -> Void)?
     let onReachedBottom: () -> Void
     let onSelect: (BaseItemDto) -> Void
     let onSelectGroup: (ProgramBlock) -> Void
@@ -112,7 +113,9 @@ extension EPGCollectionView {
 
         private var accentColor: Color = .jellyfinPurple
         private var dataSource: UICollectionViewDiffableDataSource<String, ItemID>?
+        private var didRequestInitialFocus = false
         private var didRequestNextPage = false
+        private var lastFocusedIndexPath: IndexPath?
         private var lastPaginationVerticalOffset: CGFloat?
         private var renderContentSignature: RenderContentSignature?
         private var renderItems: [ItemID: RenderItem] = [:]
@@ -166,6 +169,7 @@ extension EPGCollectionView {
             if contentSignature != renderContentSignature {
                 if let renderContentSignature,
                    renderContentSignature.startDate != contentSignature.startDate {
+                    lastFocusedIndexPath = nil
                     representable.proxy.reset()
                 }
 
@@ -181,10 +185,11 @@ extension EPGCollectionView {
             }
 
             let nowOffset = layout.width(from: viewModel.startDate, to: viewModel.now)
+            let isNowVisible = viewModel.now >= viewModel.startDate && viewModel.now <= viewModel.endDate
             let nextRenderState = RenderState(
                 sections: sections,
                 contentWidth: max(1, layout.width(from: viewModel.startDate, to: viewModel.endDate)),
-                nowOffset: viewModel.now >= viewModel.startDate ? nowOffset : nil,
+                nowOffset: isNowVisible ? nowOffset : nil,
                 now: viewModel.now,
                 programsRevision: viewModel.programsRevision,
                 rowHeight: layout.rowHeight
@@ -201,7 +206,7 @@ extension EPGCollectionView {
             gridLayout.rowHeight = nextRenderState.rowHeight
             gridLayout.contentWidth = nextRenderState.contentWidth
             gridLayout.nowOffset = nextRenderState.nowOffset
-            gridLayout.nowColor = UIColor(accentColor)
+            gridLayout.nowColor = .systemRed
 
             if sectionsDidChange {
                 gridLayout.sectionFrames = nextRenderState.sections.map { section in
@@ -228,6 +233,16 @@ extension EPGCollectionView {
 
             representable.proxy.registerContent(collectionView, centeringOn: gridLayout.nowOffset)
             representable.proxy.registerVertical(collectionView)
+
+            #if os(tvOS)
+            if !didRequestInitialFocus, sections.isNotEmpty {
+                didRequestInitialFocus = true
+                DispatchQueue.main.async { [weak collectionView] in
+                    collectionView?.setNeedsFocusUpdate()
+                    collectionView?.updateFocusIfNeeded()
+                }
+            }
+            #endif
         }
 
         private func makeSections(
@@ -301,7 +316,10 @@ extension EPGCollectionView {
                     scrollState: scrollState,
                     block: block,
                     leadingOffset: renderItem.frame.minX,
+                    cellWidth: renderItem.frame.width,
+                    isLarge: representable.viewLayout.isLarge,
                     isCurrent: block.isAiring(at: representable.viewModel.now),
+                    isPast: block.end <= representable.viewModel.now,
                     isFocused: isFocused,
                     accentColor: accentColor,
                     action: action
@@ -355,6 +373,38 @@ extension EPGCollectionView {
             guard let itemID = dataSource?.itemIdentifier(for: indexPath) else { return }
 
             select(itemID)
+        }
+
+        func indexPathForPreferredFocusedView(in collectionView: UICollectionView) -> IndexPath? {
+            if let last = lastFocusedIndexPath,
+               let section = renderState?.sections[safe: last.section],
+               section.items.indices.contains(last.item) {
+                return last
+            }
+
+            guard let representable,
+                  let firstSection = renderState?.sections.first
+            else { return nil }
+
+            if let currentIndex = firstSection.items.firstIndex(where: { $0.block.isAiring(at: representable.viewModel.now) }) {
+                return IndexPath(item: currentIndex, section: 0)
+            }
+
+            return firstSection.items.isEmpty ? nil : IndexPath(item: 0, section: 0)
+        }
+
+        func collectionView(
+            _ collectionView: UICollectionView,
+            didUpdateFocusIn context: UICollectionViewFocusUpdateContext,
+            with coordinator: UIFocusAnimationCoordinator
+        ) {
+            guard let nextIndexPath = context.nextFocusedIndexPath,
+                  let itemID = dataSource?.itemIdentifier(for: nextIndexPath),
+                  let block = renderItems[itemID]?.block
+            else { return }
+
+            lastFocusedIndexPath = nextIndexPath
+            representable?.onFocus?(block)
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {

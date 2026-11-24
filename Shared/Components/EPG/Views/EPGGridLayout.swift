@@ -71,7 +71,7 @@ final class EPGGridLayout: UICollectionViewLayout {
                 forDecorationViewOfKind: nowLineKind,
                 with: IndexPath(item: 0, section: 0)
             )
-            attributes.frame = CGRect(x: nowOffset, y: 0, width: 2, height: contentHeight)
+            attributes.frame = CGRect(x: nowOffset - 1.5, y: 0, width: 3, height: contentHeight)
             attributes.zIndex = 100
             attributes.color = nowColor
             nowLineAttributes = attributes
@@ -135,6 +135,16 @@ private final class EPGNowLineAttributes: UICollectionViewLayoutAttributes {
 }
 
 private final class EPGNowLineView: UICollectionReusableView {
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
 
     override func apply(_ layoutAttributes: UICollectionViewLayoutAttributes) {
         super.apply(layoutAttributes)

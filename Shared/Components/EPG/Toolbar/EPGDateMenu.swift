@@ -10,6 +10,12 @@ import SwiftUI
 
 struct EPGDateMenu: View {
 
+    @AdaptiveLayout
+    private var viewLayout
+
+    @FocusState
+    private var isFocused: Bool
+
     let viewModel: EPGViewModel
 
     private var selection: Binding<Date> {
@@ -21,14 +27,57 @@ struct EPGDateMenu: View {
         )
     }
 
+    private var selectedLabel: String {
+        viewModel.selectedDate.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())
+    }
+
+    @ContentBuilder
+    private var pickerContent: some View {
+        Picker(L10n.date, selection: selection) {
+            ForEach(viewModel.availableDates, id: \.self) { date in
+                Text(date.formatted(.dateTime.weekday(viewLayout.isLarge ? .wide : .abbreviated).month(.abbreviated).day()))
+                    .tag(date)
+            }
+        }
+    }
+
     @ContentBuilder
     var body: some View {
-        Menu(L10n.date, systemImage: "calendar") {
-            Picker(L10n.date, selection: selection) {
-                ForEach(viewModel.availableDates, id: \.self) { date in
-                    Text(date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))
-                        .tag(date)
+        if viewLayout.isLarge {
+            Menu {
+                pickerContent
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "calendar")
+                        .font(.system(size: 20, weight: .semibold))
+
+                    Text(selectedLabel)
+                        .font(.system(size: 21, weight: .semibold))
+                        .lineLimit(1)
+
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 16, weight: .semibold))
+                        .opacity(0.72)
                 }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 11)
+                .backport
+                .glassEffect(
+                    .regular.selection(
+                        tint: isFocused ? .white : nil,
+                        foregroundColor: isFocused ? .black : .primary
+                    )
+                    .interactive(),
+                    in: .capsule
+                )
+            }
+            .buttonStyle(EPGButtonStyle())
+            .focused($isFocused)
+            .scaleEffect(isFocused ? 1.04 : 1)
+            .animation(.easeInOut(duration: 0.1), value: isFocused)
+        } else {
+            Menu(L10n.date, systemImage: "calendar") {
+                pickerContent
             }
         }
     }

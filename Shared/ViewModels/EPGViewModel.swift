@@ -139,7 +139,7 @@ final class EPGViewModel: ViewModel {
             }
             .store(in: &cancellables)
 
-        Timer.publish(every: 60, on: .main, in: .common)
+        Timer.publish(every: 30, on: .main, in: .common)
             .autoconnect()
             .sink { [weak self] date in
                 Task { @MainActor in
@@ -278,6 +278,7 @@ final class EPGViewModel: ViewModel {
         parameters.enableImages = false
         parameters.enableTotalRecordCount = false
         parameters.enableUserData = false
+        parameters.fields = [.genres, .isHD, .overview]
         parameters.maxStartDate = endDate
         parameters.minEndDate = startDate
         parameters.sortBy = [.startDate]

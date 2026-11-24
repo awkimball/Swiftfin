@@ -18,10 +18,14 @@ struct EPGChannelColumn: View {
     @AppTheme
     private var theme
 
+    @FocusState
+    private var isNowButtonFocused: Bool
+
     let bottomInset: CGFloat
     let proxy: EPGScrollProxy
     let selectedChannelID: String?
     let viewModel: EPGViewModel
+    var onFocusChannel: ((BaseItemDto) -> Void)?
     let action: (BaseItemDto) -> Void
 
     @ContentBuilder
@@ -29,37 +33,51 @@ struct EPGChannelColumn: View {
         let layout = EPGLayout(viewLayout: viewLayout)
 
         VStack(spacing: 0) {
-            ZStack {
-                if !viewLayout.isLarge, viewModel.now >= viewModel.startDate {
+            ZStack(alignment: viewLayout.isLarge ? .leading : .center) {
+                if viewModel.now >= viewModel.startDate, viewModel.now <= viewModel.endDate {
                     Button {
                         proxy.scrollTo(
                             centering: layout.width(from: viewModel.startDate, to: viewModel.now)
                         )
                     } label: {
-                        Text(L10n.onNow)
-                            .font(.caption2)
-                            .fontWeight(.semibold)
-                            .lineLimit(1)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .backport
-                            .glassEffect(
-                                .regular.interactive(false),
-                                in: .capsule
+                        HStack(spacing: viewLayout.isLarge ? 10 : 5) {
+                            Circle()
+                                .fill(Color(uiColor: .systemRed))
+                                .frame(width: viewLayout.isLarge ? 10 : 6, height: viewLayout.isLarge ? 10 : 6)
+
+                            Text(L10n.onNow)
+                                .font(.system(size: viewLayout.isLarge ? 22 : 12, weight: .semibold))
+                                .lineLimit(1)
+                        }
+                        .padding(.horizontal, viewLayout.isLarge ? 20 : 10)
+                        .padding(.vertical, viewLayout.isLarge ? 9 : 5)
+                        .backport
+                        .glassEffect(
+                            .regular.selection(
+                                tint: isNowButtonFocused ? .white : nil,
+                                foregroundColor: isNowButtonFocused ? .black : .primary
                             )
+                            .interactive(),
+                            in: .capsule
+                        )
                     }
                     .buttonStyle(EPGButtonStyle())
+                    .focused($isNowButtonFocused)
+                    .padding(.leading, viewLayout.isLarge ? 4 : 0)
                 }
             }
             .frame(width: layout.channelColumnWidth, height: layout.rulerHeight)
 
-            Divider()
+            Rectangle()
+                .fill(Color.primary.opacity(0.10))
+                .frame(height: 1)
 
             ScrollView(.vertical) {
                 LazyVStack(spacing: 0) {
                     ForEach(viewModel.channels) { channel in
                         EPGChannelButton(
                             channel: channel.snapshot,
+                            onFocus: { onFocusChannel?(channel.snapshot) },
                             action: { action(channel.snapshot) }
                         )
                         .isSelected(channel.itemID == selectedChannelID)
