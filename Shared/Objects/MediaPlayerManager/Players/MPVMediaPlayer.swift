@@ -19,8 +19,29 @@ final class MPVMediaPlayer {
     let displayTitle = MediaPlayerType.mpv.displayTitle
     let playbackProfile = PlaybackProfile.local(.mpv)
 
-    let player = MPVPlayer(configuration: .init(audio: .init(audioSession: .hostManaged)))
+    let player = MPVPlayer(configuration: MPVMediaPlayer.makePlayerConfiguration())
     private let textSubtitles = TextSubtitlePresentation()
+
+    private static func makePlayerConfiguration() -> MPVPlayerConfiguration {
+        #if os(tvOS)
+        MPVPlayerConfiguration(
+            audio: .init(audioSession: .hostManaged),
+            cache: .init(
+                mode: .automatic,
+                maximumBytes: 256 * 1024 * 1024,
+                maximumBackBytes: 128 * 1024 * 1024
+            ),
+            initialBufferDuration: .milliseconds(500),
+            networkCacheDuration: .seconds(30),
+            rebufferDuration: .milliseconds(250)
+        )
+        #else
+        MPVPlayerConfiguration(
+            audio: .init(audioSession: .hostManaged),
+            rebufferDuration: .milliseconds(500)
+        )
+        #endif
+    }
 
     @ObservationIgnored
     weak var mediaSession: MediaSession?
